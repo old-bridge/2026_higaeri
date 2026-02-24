@@ -3,7 +3,9 @@
  * ロガーマイコン（Modbus Master）
  * 
  * 機能：
- * - エアデータと表示マイコンからデータを読み込み
+ * - エアデータマイコンからセンサーデータを読み込み
+ * - Display D-1（TFT + 大気圧センサ）からデータを読み込み
+ *   ※ Display D-2のセンサーデータはD-1経由で取得
  * - MicroSD に全データをログ記録
  * - IMU から姿勢データを読む（I2C）
  * - RTC から時刻を取得（I2C）
@@ -22,8 +24,8 @@
 ModbusMaster master(&Serial0, DE_PIN);
 
 // センサー値バッファ
-uint16_t airDataBuf[AIR_REG_READ_SIZE];      // エアデータから読む
-uint16_t displayBuf[DISP_REG_READ_SIZE];     // 表示から読む
+uint16_t airDataBuf[AIR_REG_READ_SIZE];          // エアデータから読む
+uint16_t displayD1Buf[DISP_D1_REG_READ_SIZE];   // Display D-1から読む
 
 unsigned long lastReadTime = 0;
 const unsigned long READ_INTERVAL = 1000;   // 1秒ごと
@@ -37,7 +39,7 @@ void setup() {
   // TODO: MicroSD初期化
   // TODO: IMU初期化
   // TODO: RTC初期化
-  // TODO: コマ1ンダ入力初期化（シリアルモニタなど）
+  // TODO: コマンド入力初期化（シリアルモニタなど）
   
   Serial.println("[LOGGER] All systems initialized");
 }
@@ -63,14 +65,16 @@ void loop() {
       Serial.println("[LOGGER] FAILED to read Air Data");
     }
     
-    // 表示マイコンから読む
-    if (master.readRegistersSync(SLAVE_ID_DISPLAY, DISP_REG_READ, displayBuf, DISP_REG_READ_SIZE)) {
-      Serial.printf("[LOGGER] Display Data: Pot1=%d, Pot2=%d, Batt=%d, US_Alt=%d, Pressure_Alt=%d\n",
-                    displayBuf[0], displayBuf[1], displayBuf[2], displayBuf[3], displayBuf[4]);
+    // Display D-1から読む（D-2のセンサーデータはD-1経由で受け取られている）
+    if (master.readRegistersSync(SLAVE_ID_DISPLAY_3_1, DISP_D1_REG_READ, displayD1Buf, DISP_D1_REG_READ_SIZE)) {
+      Serial.printf("[LOGGER] Display D-1: Baro_Alt=%d\n", displayD1Buf[0]);
+      
+      // Display D-1内部には D-2 から受け取ったセンサーデータもある
+      // D-1の displaySlave.getPotentiometer1() など経由でアクセス可能
       
       // TODO: MicroSDに記録
     } else {
-      Serial.println("[LOGGER] FAILED to read Display Data");
+      Serial.println("[LOGGER] FAILED to read Display D-1");
     }
   }
 
@@ -92,17 +96,12 @@ void changeMasterBaud(int baudIdx) {
   master.requestBaudChange(SLAVE_ID_AIR_DATA, baudIdx);
   delay(2000);
   
-  // 次に表示マイコンを切り替え
-  Serial.printf("Changing Display baud to index %d...\n", baudIdx);
-  master.requestBaudChange(SLAVE_ID_DISPLAY, baudIdx);
+  // 次に Display D-1 を切り替え
+  Serial.printf("Changing Display D-1 baud to index %d...\n", baudIdx);
+  master.requestBaudChange(SLAVE_ID_DISPLAY_3_1, baudIdx);
   delay(2000);
   
-  Serial.printf("All slaves now at %ld baud\n", master.getCurrentBaud());
-}
-
-/**
- * シリアルモニタからのコマンド処理（オプション）
- */
+  Serial.printf("All slaves now at correct baud\n");
 void handleSerialCommand() {
   if (Serial.available() > 0) {
     char cmd = Serial.read();
