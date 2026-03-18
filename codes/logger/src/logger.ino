@@ -14,6 +14,9 @@
 
 #define DE_PIN D2  // RS485制御ピン
 
+#include "FS.h"
+#include "SD.h"
+#include "SPI.h"
 #include "../shared/ModbusConfig.h"
 #include "../shared/ModbusMaster.h"
 
@@ -30,13 +33,22 @@ uint16_t displayD1Buf[DISP_D1_REG_READ_SIZE];   // Display D-1から読む
 unsigned long lastReadTime = 0;
 const unsigned long READ_INTERVAL = 1000;   // 1秒ごと
 
+// 送信用バッファ
+uint16_t rotationCountToSend = 0;  // display_d1に送信する回転数
+
+// SD カード関連
+const char* LOG_FILE = "/flight_log.csv";  // ログファイル名
+bool sdCardReady = false;                   // SD カード初期化状態
+
 // ===================================================================
 // セットアップ
 // ===================================================================
 void setup() {
   master.begin();
   
-  // TODO: MicroSD初期化
+  // SD カード初期化
+  initSDCard();
+  
   // TODO: IMU初期化
   // TODO: RTC初期化
   // TODO: コマンド入力初期化（シリアルモニタなど）
@@ -60,7 +72,18 @@ void loop() {
       Serial.printf("[LOGGER] Air Data: Rotation=%d, AS5600_1=%d, AS5600_2=%d, Batt=%d\n",
                     airDataBuf[0], airDataBuf[1], airDataBuf[2], airDataBuf[3]);
       
-      // TODO: MicroSDに記録
+      // 回転数を display_d1 に送信
+      rotationCountToSend = airDataBuf[0];
+      if (master.writeRegistersSync(SLAVE_ID_DISPLAY_3_1, DISP_D1_REG_WRITE, &rotationCountToSend, 1)) {
+        Serial.printf("[LOGGER] Sent rotation count to Display D-1: %d\n", rotationCountToSend);
+      } else {
+        Serial.println("[LOGGER] FAILED to send rotation count to Display D-1");
+      }
+      
+      // SDカードに記録
+      if (sdCardReady) {
+        logAirData(airDataBuf);
+      }
     } else {
       Serial.println("[LOGGER] FAILED to read Air Data");
     }
@@ -72,7 +95,10 @@ void loop() {
       // Display D-1内部には D-2 から受け取ったセンサーデータもある
       // D-1の displaySlave.getPotentiometer1() など経由でアクセス可能
       
-      // TODO: MicroSDに記録
+      // SDカードに記録
+      if (sdCardReady) {
+        logDisplayData(displayD1Buf);
+      }
     } else {
       Serial.println("[LOGGER] FAILED to read Display D-1");
     }
@@ -102,19 +128,99 @@ void changeMasterBaud(int baudIdx) {
   delay(2000);
   
   Serial.printf("All slaves now at correct baud\n");
-void handleSerialCommand() {
-  if (Serial.available() > 0) {
-    char cmd = Serial.read();
-    switch (cmd) {
-      case 'r':
-        Serial.println("Requesting READ test...");
-        // テスト読み込み
-        break;
-      case 'w':
-        Serial.println("Requesting WRITE test...");
-        // テスト書き込み
-        break;
-      case 'b':
+}
+
+// ===================================================================
+// SDカード関連関数
+// ===================================================================
+
+/**
+ * SDカード初期化
+ */
+void initSDCard() {
+  Serial.println("[LOGGER] Initializing SD card...");
+  
+  if (!SD.begin()) {
+    Serial.println("[LOGGER] SD card mount failed");
+    sdCardReady = false;
+    return;
+  }
+  
+  uint8_t cardType = SD.cardType();
+  if (cardType == CARD_NONE) {
+    Serial.println("[LOGGER] No SD card attached");
+    sdCardReady = false;
+    return;
+  }
+  
+  // カード情報を表示
+  Serial.print("[LOGGER] SD Card Type: ");
+  if (cardType == CARD_MMC) {
+    Serial.println("MMC");
+  } else if (cardType == CARD_SD) {
+    Serial.println("SDSC");
+  } else if (cardType == CARD_SDHC) {
+    Serial.println("SDHC");
+  } else {
+    Serial.println("UNKNOWN");
+  }
+  
+  uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+  Serial.printf("[LOGGER] SD Card Size: %lluMB\n", cardSize);
+  Serial.printf("[LOGGER] Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
+  
+  // ログファイルが存在しない場合はヘッダを書き込み
+  if (!SD.exists(LOG_FILE)) {
+    File file = SD.open(LOG_FILE, FILE_WRITE);
+    if (file) {
+      file.println("Timestamp,Rotation,AS5600_1,AS5600_2,Battery,Baro_Alt");
+      file.close();
+      Serial.printf("[LOGGER] Created log file: %s\n", LOG_FILE);
+    }
+  }
+  
+  sdCardReady = true;
+  Serial.println("[LOGGER] SD card ready");
+}
+
+/**
+ * エアデータをSDカードに記録
+ */
+void logAirData(uint16_t* buf) {
+  if (!sdCardReady) return;
+  
+  char logEntry[128];
+  unsigned long ts = millis();
+  
+  sprintf(logEntry, "%lu,%u,%u,%u,%u,",
+          ts, buf[0], buf[1], buf[2], buf[3]);
+  
+  File file = SD.open(LOG_FILE, FILE_APPEND);
+  if (file) {
+    file.print(logEntry);
+  } else {
+    Serial.printf("[LOGGER] Failed to open log file for writing\n");
+  }
+  file.close();
+}
+
+/**
+ * ディスプレイデータをSDカードに記録
+ */
+void logDisplayData(uint16_t* buf) {
+  if (!sdCardReady) return;
+  
+  char logEntry[32];
+  sprintf(logEntry, "%u\n", buf[0]);  // Baro_Alt
+  
+  File file = SD.open(LOG_FILE, FILE_APPEND);
+  if (file) {
+    file.print(logEntry);
+  } else {
+    Serial.printf("[LOGGER] Failed to append to log file\n");
+  }
+  file.close();
+}
         Serial.println("Enter baud index (0-4): ");
         while (!Serial.available());
         int baudIdx = Serial.read() - '0';

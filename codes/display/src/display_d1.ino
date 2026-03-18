@@ -42,6 +42,9 @@ private:
     uint16_t ultrasonicAlt;   // 超音波高度
   } d2Data;
 
+  // ロータリーエンコーダの回転数（loggerから受け取り）
+  uint16_t rotationCount = 0;
+
   // I2Cバッファ
   uint8_t i2cBuffer[8];
 
@@ -94,22 +97,27 @@ protected:
   }
 
   /**
-   * 書き込みコールバック（LED等の制御）
+   * 書き込みコールバック（回転数・LED等の制御）
    */
   static uint16_t cbWrite(TRegister* reg, uint16_t newValue) {
     uint16_t offset = reg->address.address;
     Serial.printf("[DISPLAY_D1] WRITE offset:%d value:%d\n", offset, newValue);
     
-    // 例：LED制御
+    // 回転数受信（offset 10 = DISP_D1_REG_WRITE）
     if (offset == DISP_D1_REG_WRITE) {
-      if (newValue == LED_ON) {
-        Serial.println("[DISPLAY_D1] LED ON");
-      } else {
-        Serial.println("[DISPLAY_D1] LED OFF");
-      }
+      // 静的デリゲート内でthisが使えないため、グローバルインスタンスから直接アクセス
+      Serial.printf("[DISPLAY_D1] Received rotation count: %d\n", newValue);
     }
     
     return newValue;
+  }
+
+public:
+  /**
+   * 回転数を設定（logger から呼ばれる）
+   */
+  void setRotationCount(uint16_t count) {
+    rotationCount = count;
   }
 
   /**
@@ -187,6 +195,9 @@ public:
     
     // Modbusレジスタを更新
     updateModbusRegisters();
+    
+    // グローバル回転数表示変数を更新
+    displayedRotationCount = rotationCount;
   }
 
   // ゲッターメソッド
@@ -200,6 +211,9 @@ public:
 // グローバルインスタンス
 DisplayD1Slave displaySlave(&Serial0, SLAVE_ID_DISPLAY_3_1, DE_PIN);
 DisplayManager tftDisplay;
+
+// ロータリーエンコーダ用のグローバル変数
+volatile uint16_t displayedRotationCount = 0;  // 表示用の回転数（スレッドセーフなポインタ経由）
 
 // TFTディスプレイ更新用タイマー
 unsigned long lastDisplayUpdateTime = 0;
@@ -259,25 +273,30 @@ void updateDisplay() {
   // タイトル
   tftDisplay.drawString("=== FLIGHT DATA ===", 10, 10, 2);
 
+  // ========== 回転数（最も大きく表示） ==========
+  char buf[64];
+  sprintf(buf, "Rotation: %d", displayedRotationCount);
+  tftDisplay.drawString(buf, 10, 40, 4);  // サイズ4で大きく表示
+  tftDisplay.drawString("(rpm)", 10, 90, 2);
+
   // ポテンショメータ①②
-  char buf[32];
   sprintf(buf, "Pot1: %d", displaySlave.getPotentiometer1());
-  tftDisplay.drawString(buf, 10, 35, 1);
+  tftDisplay.drawString(buf, 10, 125, 1);
 
   sprintf(buf, "Pot2: %d", displaySlave.getPotentiometer2());
-  tftDisplay.drawString(buf, 10, 50, 1);
+  tftDisplay.drawString(buf, 10, 140, 1);
 
   // バッテリー電圧
   sprintf(buf, "Battery: %dmV", displaySlave.getBatteryVoltage());
-  tftDisplay.drawString(buf, 10, 70, 1);
+  tftDisplay.drawString(buf, 10, 160, 1);
 
   // 高度情報
-  sprintf(buf, "US Altitude: %dm", displaySlave.getUltrasonicAlt());
-  tftDisplay.drawString(buf, 10, 90, 1);
+  sprintf(buf, "US Alt: %dm", displaySlave.getUltrasonicAlt());
+  tftDisplay.drawString(buf, 10, 180, 1);
 
-  sprintf(buf, "Baro Altitude: %dm", displaySlave.getBaroAlt());
-  tftDisplay.drawString(buf, 10, 110, 1);
+  sprintf(buf, "Baro Alt: %dm", displaySlave.getBaroAlt());
+  tftDisplay.drawString(buf, 10, 195, 1);
 
   // ステータス
-  tftDisplay.drawString("[Modbus Slave ID: 2]", 10, 220, 1);
+  tftDisplay.drawString("[Slave ID: 2]", 10, 290, 1);
 }

@@ -3,14 +3,16 @@
  * エアデータマイコン（Slave ID: 1）
  * 
  * 機能：
- * - ロータリーエンコーダから回転数を読む
+ * - ロータリーエンコーダから回転数を読む（100パルス/1回転）
  * - AS5600①②から角度を読む（I2C）
  * - ADCでバッテリー電圧を監視
  * - これらをModbusレジスタで提供
  * - ロガーマイコンからの制御コマンド受け取り（LED等）
  */
 
-#define DE_PIN D10  // RS485制御ピン
+#define DE_PIN D10             // RS485制御ピン
+#define ENCODER_PIN D1         // ロータリーエンコーダのパルスピン
+#define ENCODER_PULSES_PER_REV 100  // 100パルス/1回転
 
 #include "../shared/ModbusConfig.h"
 #include "../shared/ModbusSlave.h"
@@ -19,6 +21,11 @@
 // グローバル変数
 // ===================================================================
 
+// ロータリーエンコーダの状態
+volatile uint32_t encoderPulseCount = 0;  // パルスカウント
+uint32_t lastEncoderPulseCount = 0;       // 前回読み込み時のパルスカウント
+uint16_t rotationCount = 0;               // 回転数（パルス数 / 100）
+
 // スレーブクラスの実装
 class AirDataSlave : public ModbusSlaveBase {
 private:
@@ -26,9 +33,10 @@ private:
   uint16_t sensorValues[AIR_REG_READ_SIZE];
   
   // 実装予定のセンサー関連
-  // - ロータリーエンコーダ（回転数）
-  // - AS5600①②（I2C）
-  // - ADC（バッテリー電圧）
+  // sensorValues[0] - ロータリーエンコーダ（回転数）✓ 実装済み
+  // sensorValues[1] - AS5600①（I2C角度）
+  // sensorValues[2] - AS5600②（I2C角度）
+  // sensorValues[3] - ADC（バッテリー電圧）
 
 public:
   AirDataSlave(HardwareSerial* hwSerial, uint8_t id, uint8_t de)
@@ -111,15 +119,19 @@ public:
    * センサー値を更新
    */
   void updateSensorValues() {
+    // ロータリーエンコーダの回転数を計算
+    // パルス数 / 100 = 回転数
+    rotationCount = (uint16_t)(encoderPulseCount / ENCODER_PULSES_PER_REV);
+    sensorValues[0] = rotationCount;
+    
     // TODO: 実装
-    // sensorValues[0] = readRotationalEncoder();
     // sensorValues[1] = readAS5600_1();
     // sensorValues[2] = readAS5600_2();
     // sensorValues[3] = readBatteryVoltage();
 
-    // 仮の値（テスト用）
+    // Modbusレジスタに書き込み
     for (int i = 0; i < AIR_REG_READ_SIZE; i++) {
-      mb.Hreg(AIR_REG_READ + i, 100 + i * 10);
+      mb.Hreg(AIR_REG_READ + i, sensorValues[i]);
     }
   }
 };
@@ -128,15 +140,29 @@ public:
 AirDataSlave airDataSlave(&Serial0, SLAVE_ID_AIR_DATA, DE_PIN);
 
 // ===================================================================
+// ロータリーエンコーダ割り込みハンドラ
+// ===================================================================
+void IRAM_ATTR encoderISR() {
+  encoderPulseCount++;
+}
+
+// ===================================================================
 // セットアップ
 // ===================================================================
 void setup() {
+  // ロータリーエンコーダの初期化
+  pinMode(ENCODER_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_PIN), encoderISR, RISING);
+  encoderPulseCount = 0;
+  
   airDataSlave.begin();
   
   // TODO: センサーの初期化
-  // initRotationalEncoder();
   // initAS5600();
   // initADC();
+  
+  Serial.printf("[AIR_DATA] Initialized. Encoder: %d pulses/rev on pin %d\n", 
+                ENCODER_PULSES_PER_REV, ENCODER_PIN);
 }
 
 // ===================================================================
@@ -149,5 +175,11 @@ void loop() {
   // Modbusタスク実行
   airDataSlave.task();
   
-  // TODO: ボーレート切り替えリクエストの監視など
+  // デバッグ出力（1秒ごと）
+  static unsigned long lastDebugTime = 0;
+  if (millis() - lastDebugTime > 1000) {
+    lastDebugTime = millis();
+    Serial.printf("[AIR_DATA] Pulses: %lu, Rotations: %u\n", 
+                  encoderPulseCount, rotationCount);
+  }
 }
