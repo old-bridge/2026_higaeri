@@ -1,17 +1,20 @@
 #ifndef MODBUS_SLAVE_H
 #define MODBUS_SLAVE_H
 
-#include <ModbusRTU.h>
+#include "ModbusRTU_wrapper.h"
 #include "ModbusConfig.h"
 
 /**
  * ModbusSlaveBase
- * スレーブマイコン用の基本クラス
+ * ModbusRTUServer を使用したスレーブマイコン用の基本クラス
  * 各スレーブはこのクラスを継承して具体的な処理を実装
+ * 
+ * 注意: ModbusRTUServer は公開コンストラクタを持つため、
+ * メンバ変数として直接宣言できます
  */
 class ModbusSlaveBase {
 protected:
-  ModbusRTUServer mb;  // ModbusRTUServer для работы в режиме Master
+  ModbusRTUServer mb;
   HardwareSerial* serial;
   uint8_t slaveId;
   uint8_t dePin;

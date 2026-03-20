@@ -31,29 +31,30 @@ const uint32_t UPDATE_INTERVAL = 500;  // Update every 500ms
 uint8_t direction = 1;  // For cycling values
 
 void setup() {
-  // シリアル通信の初期化とモニタ起動待ちのウェイト
+  // シリアル初期化（デバッグ用）
   Serial.begin(115200);
-  delay(2000);
+  delay(100);
   Serial.println("--- TFT Demo Start ---");
 
-  Serial.println("Step 1: tft.init() 実行前");
+  // ★重要: XIAO ESP32C3のハードウェアSPIピンを明示的に割り当てる
+  // SPI.begin(SCK, MISO, MOSI);
+  SPI.begin(8, 9, 10);  // SCK=8, MISO=9, MOSI=10
+  Serial.println("SPI initialized");
   
+  // TFT初期化
+  Serial.println("Initializing TFT...");
   tft.init();  // Initialize TFT display
+  Serial.println("TFT init() completed");
   
-  Serial.println("Step 2: tft.init() 完了");
-
   tft.setRotation(0);
   tft.fillScreen(TFT_GREY);
-  
-  Serial.println("Step 3: 画面塗りつぶし完了");
-
   tft.setTextColor(TFT_WHITE, TFT_GREY);
-  
+
   // Draw title
   tft.drawCentreString("Display D-1 Test", 120, 10, 2);
   tft.drawCentreString("Rotation Demo", 120, 30, 1);
 
-  Serial.println("Step 4: 初期表示完了");
+  Serial.println("TFT initialized successfully");
 }
 
 void loop() {

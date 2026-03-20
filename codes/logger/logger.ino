@@ -13,6 +13,7 @@
  */
 
 #define DE_PIN D2  // RS485制御ピン
+#define LED_PIN D1  // LED制御ピン
 
 #include "FS.h"
 #include "SD.h"
@@ -38,18 +39,51 @@ const unsigned long READ_INTERVAL = 1000;   // 1秒ごと
 // 送信用バッファ
 uint16_t rotationCountToSend = 0;  // display_d1に送信する回転数
 
+// LED制御用
+#define LED_BLINK_SUCCESS 1  // 点滅（成功）
+#define LED_ON_ERROR 2       // 点灯（エラー）
+uint16_t ledControlValue = 0;  // D1に送信するLED制御値
+unsigned long ledLastToggleTime = 0;
+const unsigned long LED_BLINK_INTERVAL = 500;  // 500ms間隔で点滅
+static bool ledBlinkState = false;  // LED点滅の状態
+
 // SD カード関連
 const char* LOG_FILE = "/flight_log.csv";  // ログファイル名
 bool sdCardReady = false;                   // SD カード初期化状態
+
+// 書き込みステータス
+struct WriteStatus {
+  bool lastWriteSuccess = false;
+  unsigned long lastWriteTime = 0;
+  uint32_t successCount = 0;
+  uint32_t failureCount = 0;
+  char statusMessage[32] = "Initializing";
+} writeStatus;
 
 // ===================================================================
 // セットアップ
 // ===================================================================
 void setup() {
-  master.begin();
-  
+  Serial.begin(115200);
+  delay(100);  // 最小限の待機（デバッグ用）
+  Serial.println("\n--- Logger Start ---");
+
+  // LEDピン初期化
+  Serial.println("[LOGGER] Initializing LED pin...");
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);  // 初期状態はOFF
+  Serial.println("[LOGGER] LED pin initialized");
+
+  // ★重要: XIAO ESP32C3のハードウェアSPIピンを明示的に割り当てる
+  Serial.println("[LOGGER] Initializing SPI...");
+  SPI.begin(8, 9, 10, 5);  // SCK=8, MISO=9, MOSI=10, CS=5
+  Serial.println("[LOGGER] SPI initialized");
+
   // SD カード初期化
   initSDCard();
+  
+  // Modbus マスタ初期化
+  master.begin();
   
   // TODO: IMU初期化
   // TODO: RTC初期化
@@ -70,9 +104,11 @@ void loop() {
     lastReadTime = millis();
     
     // エアデータマイコンから読む
+    bool airDataReadSuccess = false;
     if (master.readRegistersSync(SLAVE_ID_AIR_DATA, AIR_REG_READ, airDataBuf, AIR_REG_READ_SIZE)) {
       Serial.printf("[LOGGER] Air Data: Rotation=%d, AS5600_1=%d, AS5600_2=%d, Batt=%d\n",
                     airDataBuf[0], airDataBuf[1], airDataBuf[2], airDataBuf[3]);
+      airDataReadSuccess = true;
       
       // 回転数を display_d1 に送信
       rotationCountToSend = airDataBuf[0];
@@ -81,30 +117,46 @@ void loop() {
       } else {
         Serial.println("[LOGGER] FAILED to send rotation count to Display D-1");
       }
-      
-      // SDカードに記録
-      if (sdCardReady) {
-        logAirData(airDataBuf);
-      }
     } else {
-      Serial.println("[LOGGER] FAILED to read Air Data");
+      Serial.println("[LOGGER] FAILED to read Air Data - will log 0");
+      airDataReadSuccess = false;
+      // 失敗時はバッファを0に初期化
+      for (int i = 0; i < AIR_REG_READ_SIZE; i++) {
+        airDataBuf[i] = 0;
+      }
     }
     
     // Display D-1から読む（D-2のセンサーデータはD-1経由で受け取られている）
+    bool displayD1ReadSuccess = false;
     if (master.readRegistersSync(SLAVE_ID_DISPLAY_3_1, DISP_D1_REG_READ, displayD1Buf, DISP_D1_REG_READ_SIZE)) {
       Serial.printf("[LOGGER] Display D-1: Baro_Alt=%d\n", displayD1Buf[0]);
-      
-      // Display D-1内部には D-2 から受け取ったセンサーデータもある
-      // D-1の displaySlave.getPotentiometer1() など経由でアクセス可能
-      
-      // SDカードに記録
-      if (sdCardReady) {
-        logDisplayData(displayD1Buf);
-      }
+      displayD1ReadSuccess = true;
     } else {
-      Serial.println("[LOGGER] FAILED to read Display D-1");
+      Serial.println("[LOGGER] FAILED to read Display D-1 - will log 0");
+      displayD1ReadSuccess = false;
+      // 失敗時はバッファを0に初期化
+      for (int i = 0; i < DISP_D1_REG_READ_SIZE; i++) {
+        displayD1Buf[i] = 0;
+      }
+    }
+    
+    // SDカードに統合ログレコードを記録（成功失敗に関わらず常に記録）
+    if (sdCardReady) {
+      logFlightData(airDataBuf, displayD1Buf);
+    }
+    
+    // 書き込み結果に基づいてLED制御値を設定
+    if (writeStatus.lastWriteSuccess) {
+      ledControlValue = LED_BLINK_SUCCESS;  // 成功時は点滅
+      Serial.println("[LOGGER] LED control: BLINK (Write Success)");
+    } else {
+      ledControlValue = LED_ON_ERROR;       // 失敗時は点灯
+      Serial.println("[LOGGER] LED control: ON (Write Error)");
     }
   }
+
+  // ロガー自身のLED制御
+  updateLoggerLED();
 
   // TODO: シリアルコマンド処理（ボーレート切り替え指令など）
   // TODO: IMU/RTCデータ読み込み
@@ -142,31 +194,32 @@ void changeMasterBaud(int baudIdx) {
 void initSDCard() {
   Serial.println("[LOGGER] Initializing SD card...");
   
-  if (!SD.begin()) {
-    Serial.println("[LOGGER] SD card mount failed");
+  // ★重要: SDライブラリの初期化時に、割り当てたCSピン(5)を渡す
+  if(!SD.begin(5)){
+    Serial.println("[LOGGER] Card Mount Failed");
     sdCardReady = false;
     return;
   }
   
   uint8_t cardType = SD.cardType();
-  if (cardType == CARD_NONE) {
+
+  if(cardType == CARD_NONE){
     Serial.println("[LOGGER] No SD card attached");
     sdCardReady = false;
     return;
   }
-  
-  // カード情報を表示
+
   Serial.print("[LOGGER] SD Card Type: ");
-  if (cardType == CARD_MMC) {
+  if(cardType == CARD_MMC){
     Serial.println("MMC");
-  } else if (cardType == CARD_SD) {
+  } else if(cardType == CARD_SD){
     Serial.println("SDSC");
-  } else if (cardType == CARD_SDHC) {
+  } else if(cardType == CARD_SDHC){
     Serial.println("SDHC");
   } else {
     Serial.println("UNKNOWN");
   }
-  
+
   uint64_t cardSize = SD.cardSize() / (1024 * 1024);
   Serial.printf("[LOGGER] SD Card Size: %lluMB\n", cardSize);
   Serial.printf("[LOGGER] Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
@@ -186,10 +239,64 @@ void initSDCard() {
 }
 
 /**
- * エアデータをSDカードに記録
+ * フライトデータを統合してSDカードに記録
+ * センサー読み込み失敗時も0を記録
+ */
+void logFlightData(uint16_t* airBuf, uint16_t* displayBuf) {
+  if (!sdCardReady) {
+    writeStatus.lastWriteSuccess = false;
+    writeStatus.failureCount++;
+    snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "SD Not Ready");
+    return;
+  }
+  
+  char logEntry[128];
+  unsigned long ts = millis();
+  
+  // CSV形式: Timestamp,Rotation,AS5600_1,AS5600_2,Battery,Baro_Alt
+  sprintf(logEntry, "%lu,%u,%u,%u,%u,%u\n",
+          ts, 
+          airBuf[0],      // Rotation
+          airBuf[1],      // AS5600_1
+          airBuf[2],      // AS5600_2
+          airBuf[3],      // Battery
+          displayBuf[0]   // Baro_Alt
+         );
+  
+  File file = SD.open(LOG_FILE, FILE_APPEND);
+  if (file) {
+    if (file.print(logEntry)) {
+      writeStatus.lastWriteSuccess = true;
+      writeStatus.successCount++;
+      snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Log: OK");
+      Serial.printf("[LOGGER] Flight log written OK: %s", logEntry);
+    } else {
+      writeStatus.lastWriteSuccess = false;
+      writeStatus.failureCount++;
+      snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Log: Write Err");
+      Serial.println("[LOGGER] Flight log write FAILED");
+    }
+    file.close();
+  } else {
+    writeStatus.lastWriteSuccess = false;
+    writeStatus.failureCount++;
+    snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Log: Open Err");
+    Serial.println("[LOGGER] Failed to open log file");
+  }
+  
+  writeStatus.lastWriteTime = millis();
+}
+
+/**
+ * エアデータをSDカードに記録（非推奨：logFlightData()を使用）
  */
 void logAirData(uint16_t* buf) {
-  if (!sdCardReady) return;
+  if (!sdCardReady) {
+    writeStatus.lastWriteSuccess = false;
+    writeStatus.failureCount++;
+    snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "SD Not Ready");
+    return;
+  }
   
   char logEntry[128];
   unsigned long ts = millis();
@@ -199,27 +306,47 @@ void logAirData(uint16_t* buf) {
   
   File file = SD.open(LOG_FILE, FILE_APPEND);
   if (file) {
-    file.print(logEntry);
+    if (file.print(logEntry)) {
+      writeStatus.lastWriteSuccess = true;
+      writeStatus.successCount++;
+      snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Air: OK");
+      Serial.println("[LOGGER] Air data written OK");
+    } else {
+      writeStatus.lastWriteSuccess = false;
+      writeStatus.failureCount++;
+      snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Air: Write Err");
+      Serial.println("[LOGGER] Air data write FAILED");
+    }
+    file.close();
   } else {
-    Serial.printf("[LOGGER] Failed to open log file for writing\n");
+    writeStatus.lastWriteSuccess = false;
+    writeStatus.failureCount++;
+    snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Air: Open Err");
+    Serial.println("[LOGGER] Failed to open log file");
   }
-  file.close();
+  
+  writeStatus.lastWriteTime = millis();
 }
 
 /**
- * ディスプレイデータをSDカードに記録
+ * ロガーのLED制御（GPIO上のLED）
+ * SD書き込み成功時は点滅、失敗時は常時点灯
  */
-void logDisplayData(uint16_t* buf) {
-  if (!sdCardReady) return;
-  
-  char logEntry[32];
-  sprintf(logEntry, "%u\n", buf[0]);  // Baro_Alt
-  
-  File file = SD.open(LOG_FILE, FILE_APPEND);
-  if (file) {
-    file.print(logEntry);
+void updateLoggerLED() {
+  if (ledControlValue == LED_BLINK_SUCCESS) {
+    // 成功時：LED点滅（500ms間隔）
+    unsigned long currentTime = millis();
+    if (currentTime - ledLastToggleTime >= LED_BLINK_INTERVAL) {
+      ledLastToggleTime = currentTime;
+      ledBlinkState = !ledBlinkState;  // 状態切り替え
+      digitalWrite(LED_PIN, ledBlinkState ? HIGH : LOW);
+      Serial.printf("[LOGGER] LED BLINK: %s\n", ledBlinkState ? "ON" : "OFF");
+    }
+  } else if (ledControlValue == LED_ON_ERROR) {
+    // エラー時：LED常時点灯
+    digitalWrite(LED_PIN, HIGH);
   } else {
-    Serial.printf("[LOGGER] Failed to append to log file\n");
+    // 初期状態：LED OFF
+    digitalWrite(LED_PIN, LOW);
   }
-  file.close();
 }

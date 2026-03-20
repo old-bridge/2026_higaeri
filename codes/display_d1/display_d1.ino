@@ -1,184 +1,85 @@
-/**
+/*
  * display_d1.ino
  * 表示マイコン D-1（Slave ID: 2）
  * 
  * 機能：
- * - TFTディスプレイに全データを表示
- * - 大気圧センサから高度を読む（I2C）
- * - Display D-2 から他のセンサー値をI2C経由で受け取る
- * - Modbusマスター（Logger）からのリクエストに応答
- * - TFT_eSPIライブラリで表示制御
+ * - TFTディスプレイにセンサーデータを表示
+ * - Modbus Slaveとして動作
+ * - I2C経由でセンサーデータ受け取り
  */
 
 #define DE_PIN D3  // RS485制御ピン
 
 #include <Wire.h>
 #include <SPI.h>
-#include <TFT_eSPI.h>  // Hardware-specific library
+#include <TFT_eSPI.h>
 #include "ModbusConfig.h"
 #include "ModbusSlave.h"
-#include "ModbusMaster.h"
-// Note: ModbusSlave.cpp and ModbusMaster.cpp are compiled as separate units
-// by the Arduino IDE, so we don't need to include them here
-// #include "ModbusSlave.cpp"
-// #include "ModbusMaster.cpp"
 
 #define TFT_GREY 0x5AEB
+#define I2C_ADDR_D2 0x30
 
-TFT_eSPI tft = TFT_eSPI();  // Invoke custom library
-
-// ===================================================================
-// I2C アドレス定義
-// ===================================================================
-#define I2C_ADDR_D2        0x30  // Display D-2のI2Cスレーブアドレス
-#define I2C_ADDR_BARO      0x77  // 大気圧センサ（例：BMP390）のアドレス
+TFT_eSPI tft = TFT_eSPI();
 
 // ===================================================================
-// グローバル変数（前方宣言）
+// センサーデータ
 // ===================================================================
+uint32_t rotationCount = 0;
+uint16_t potentiometer1 = 500;
+uint16_t potentiometer2 = 1200;
+uint16_t batteryVoltage = 3800;
+uint16_t ultrasonicAlt = 1250;
+uint16_t baroAlt = 1245;
 
-// ロータリーエンコーダ用のグローバル変数
-volatile uint16_t displayedRotationCount = 0;  // 表示用の回転数
-
-// TFTディスプレイ更新用タイマー
-unsigned long lastDisplayUpdateTime = 0;
-const unsigned long DISPLAY_UPDATE_INTERVAL = 100;  // 100ms ごとに更新
-
-// スレーブクラスの実装
-class DisplayD1Slave : public ModbusSlaveBase {
-private:
-  // センサー値バッファ
-  uint16_t sensorValues[DISP_D1_REG_READ_SIZE];
+// Modbus通信ステータス
+struct ModbusStatus {
+  // I2C通信状況（D-2センサー）
+  bool i2cSuccess = false;
+  unsigned long i2cLastSuccessTime = 0;
+  uint32_t i2cSuccessCount = 0;
+  uint32_t i2cFailureCount = 0;
   
-  // D-2からのセンサーデータ（I2C経由）
-  struct SensorDataD2 {
-    uint16_t potentiometer1;  // ポテンショメータ①
-    uint16_t potentiometer2;  // ポテンショメータ②
-    uint16_t batteryVoltage;  // バッテリー電圧
-    uint16_t ultrasonicAlt;   // 超音波高度
-  } d2Data;
+  // Modbusマスター通信状況（ロガーからのリクエスト受信）
+  bool masterCommActive = false;
+  unsigned long masterLastRequestTime = 0;
+  uint32_t masterRequestCount = 0;
+  
+  char i2cStatusMessage[16] = "No Data";
+  char masterStatusMessage[16] = "No Request";
+} modbusStatus;
 
-  // ロータリーエンコーダの回転数（loggerから受け取り）
-  uint16_t rotationCount = 0;
+// TFT更新タイマー
+unsigned long lastDisplayUpdateTime = 0;
+const unsigned long DISPLAY_UPDATE_INTERVAL = 100;
 
-  // I2Cバッファ
-  uint8_t i2cBuffer[8];
+// Modbusスレーブインスタンス
+ModbusSlaveBase* displaySlave = nullptr;
 
+// ===================================================================
+// DisplayD1Slave: ModbusSlaveBase の具体的な実装
+// ===================================================================
+class DisplayD1Slave : public ModbusSlaveBase {
 public:
   DisplayD1Slave(HardwareSerial* hwSerial, uint8_t id, uint8_t de)
-    : ModbusSlaveBase(hwSerial, id, de) {
-    for (int i = 0; i < DISP_D1_REG_READ_SIZE; i++) {
-      sensorValues[i] = 0;
-    }
-    memset(&d2Data, 0, sizeof(d2Data));
-    memset(i2cBuffer, 0, sizeof(i2cBuffer));
-  }
+    : ModbusSlaveBase(hwSerial, id, de) {}
 
 protected:
   /**
-   * レジスタの初期化
-   * モダンなModbusRTUServerでは、レジスタのセットアップは不要
-   * 必要に応じてスレッドセーフなアクセスのみ使用
+   * レジスタのセットアップ
    */
   void setupRegisters() override {
-    // ModbusRTUServer では明示的なレジスタ登録は不要
-    // setHoldingValue() と getHoldingValue() で直接アクセス可能
+    // 最小限の実装：何も初期化しない
+    // ModbusRTUServer が自動的にレジスタバッファを管理
   }
 
   /**
    * コールバック関数の登録
-   * モダンなModbusRTUServerではコールバックが不要
    */
   void setupCallbacks() override {
-    // ModbusRTUServer はイベントハンドラベースのため、
-    // 明示的なコールバック登録は不要
+    // 最小限の実装：何も登録しない
+    // 必要に応じて後で追加可能
   }
-
-public:
-  /**
-   * D-2からI2C経由でセンサーデータを読み込む
-   */
-  bool readSensorDataFromD2() {
-    Wire.beginTransmission(I2C_ADDR_D2);
-    Wire.write(0x00);  // レジスタアドレス 0 から読み込み開始
-    if (Wire.endTransmission() != 0) {
-      Serial.println("[DISPLAY_D1] I2C error: Failed to request data from D-2");
-      return false;
-    }
-
-    // 8バイト読み込み（4つのuint16_t）
-    int bytesRead = Wire.requestFrom(I2C_ADDR_D2, 8);
-    if (bytesRead != 8) {
-      Serial.printf("[DISPLAY_D1] I2C error: Expected 8 bytes, got %d\n", bytesRead);
-      return false;
-    }
-
-    // バッファに読み込む
-    for (int i = 0; i < 8; i++) {
-      i2cBuffer[i] = Wire.read();
-    }
-
-    // uint16_t に変換（リトルエンディアン想定）
-    d2Data.potentiometer1 = (i2cBuffer[1] << 8) | i2cBuffer[0];
-    d2Data.potentiometer2 = (i2cBuffer[3] << 8) | i2cBuffer[2];
-    d2Data.batteryVoltage = (i2cBuffer[5] << 8) | i2cBuffer[4];
-    d2Data.ultrasonicAlt   = (i2cBuffer[7] << 8) | i2cBuffer[6];
-
-    Serial.printf("[DISPLAY_D1] Received from D-2: Pot1=%d, Pot2=%d, Batt=%d, US_Alt=%d\n",
-                  d2Data.potentiometer1, d2Data.potentiometer2,
-                  d2Data.batteryVoltage, d2Data.ultrasonicAlt);
-    return true;
-  }
-
-  /**
-   * 気圧センサから高度を読み込む（スタブ）
-   * 実装は使用する気圧センサライブラリに依存
-   */
-  bool readBarometricAltitude() {
-    // TODO: 実装予定
-    // BMP390またはBMP680など、使用するセンサに応じて実装
-    sensorValues[0] = 0;  // ダミー値
-    return true;
-  }
-
-  /**
-   * Modbusレジスタを更新（新API）
-   */
-  void updateModbusRegisters() {
-    mb.setHoldingValue(DISP_D1_REG_READ + 0, sensorValues[0]);
-    mb.setHoldingValue(DISP_D1_REG_WRITE, rotationCount);  // 回転数を書き込みレジスタに設定
-  }
-
-  /**
-   * 回転数を設定（ロガーからModbus経由で受け取った値）
-   */
-  void setRotationCount(uint16_t count) {
-    rotationCount = count;
-  }
-  void updateTask() {
-    // D-2からセンサーデータを読む
-    readSensorDataFromD2();
-    
-    // 気圧センサを読む
-    readBarometricAltitude();
-    
-    // Modbusレジスタを更新
-    updateModbusRegisters();
-    
-    // グローバル回転数表示変数を更新
-    displayedRotationCount = rotationCount;
-  }
-
-  // ゲッターメソッド
-  uint16_t getPotentiometer1() const { return d2Data.potentiometer1; }
-  uint16_t getPotentiometer2() const { return d2Data.potentiometer2; }
-  uint16_t getBatteryVoltage() const { return d2Data.batteryVoltage; }
-  uint16_t getUltrasonicAlt() const { return d2Data.ultrasonicAlt; }
-  uint16_t getBaroAlt() const { return sensorValues[0]; }
 };
-
-// グローバルインスタンス
-DisplayD1Slave displaySlave(&Serial0, SLAVE_ID_DISPLAY_3_1, DE_PIN);
 
 // ===================================================================
 // セットアップ
@@ -186,39 +87,42 @@ DisplayD1Slave displaySlave(&Serial0, SLAVE_ID_DISPLAY_3_1, DE_PIN);
 void setup() {
   // シリアル初期化（デバッグ用）
   Serial.begin(115200);
-  // タイムアウト付き待機：USB接続がない場合は5秒でスキップ
-  unsigned long serialWaitStart = millis();
-  while (!Serial && millis() - serialWaitStart < 5000);
-  delay(2000);  // Monitor initialization wait
-  
-  Serial.println("[DISPLAY_D1] --- System Start ---");
+  delay(100);
+  Serial.println("\n[DISPLAY_D1] --- System Start ---");
 
-  Serial.println("[DISPLAY_D1] Step 1: tft.init() 実行前");
+  // ★重要: XIAO ESP32C3のハードウェアSPIピンを明示的に割り当てる
+  Serial.println("[DISPLAY_D1] Initializing SPI...");
+  SPI.begin(8, 9, 10);  // SCK=8, MISO=9, MOSI=10
+  Serial.println("[DISPLAY_D1] SPI initialized");
   
-  tft.init();  // Initialize TFT display
+  // TFT初期化
+  Serial.println("[DISPLAY_D1] Initializing TFT...");
+  tft.init();
+  Serial.println("[DISPLAY_D1] TFT init() completed");
   
-  Serial.println("[DISPLAY_D1] Step 2: tft.init() 完了");
-
   tft.setRotation(0);
   tft.fillScreen(TFT_GREY);
-  
-  Serial.println("[DISPLAY_D1] Step 3: 画面塗りつぶし完了");
-
-  // I2C初期化
-  Wire.begin();
-  Wire.setClock(400000);  // 400kHz
-  Serial.println("[DISPLAY_D1] I2C initialized");
-
-  // Modbus Slave 初期化
-  displaySlave.begin();
-  
-  // TFT text color setup
   tft.setTextColor(TFT_WHITE, TFT_GREY);
   
-  // Draw title
+  // Draw initial message
   tft.drawCentreString("Display D-1", 120, 30, 4);
+  tft.drawCentreString("Starting...", 120, 100, 2);
+  
+  Serial.println("[DISPLAY_D1] TFT display initialized");
 
-  Serial.println("[DISPLAY_D1] All systems initialized");
+  // I2C初期化
+  Serial.println("[DISPLAY_D1] Initializing I2C...");
+  Wire.begin();
+  Wire.setClock(400000);
+  Serial.println("[DISPLAY_D1] I2C initialized");
+
+  // Modbus Slave初期化
+  Serial.println("[DISPLAY_D1] Initializing Modbus Slave...");
+  displaySlave = new DisplayD1Slave(&Serial0, SLAVE_ID_DISPLAY_3_1, DE_PIN);
+  displaySlave->begin();
+  Serial.println("[DISPLAY_D1] Modbus Slave initialized");
+
+  Serial.println("[DISPLAY_D1] All systems initialized - Ready!");
 }
 
 // ===================================================================
@@ -226,10 +130,34 @@ void setup() {
 // ===================================================================
 void loop() {
   // Modbusスレーブタスク（常に実行必要）
-  displaySlave.task();
+  if (displaySlave) {
+    displaySlave->task();
+    
+    // マスターからのリクエストを検出
+    // ロギング用フラグをチェック
+    static unsigned long lastMasterActivity = 0;
+    static bool masterWasActive = false;
+    
+    // Serial0でデータが受信されているかチェック
+    if (Serial0.available() > 0) {
+      // Modbusマスターからのリクエストがある
+      modbusStatus.masterCommActive = true;
+      modbusStatus.masterLastRequestTime = millis();
+      modbusStatus.masterRequestCount++;
+      lastMasterActivity = millis();
+      masterWasActive = true;
+      snprintf(modbusStatus.masterStatusMessage, sizeof(modbusStatus.masterStatusMessage), "Active");
+    }
+    
+    // タイムアウト検出（3秒以上通信がない）
+    if (millis() - lastMasterActivity > 3000 && masterWasActive) {
+      modbusStatus.masterCommActive = false;
+      snprintf(modbusStatus.masterStatusMessage, sizeof(modbusStatus.masterStatusMessage), "Idle");
+    }
+  }
 
-  // センサーデータ更新タスク
-  displaySlave.updateTask();
+  // D-2からセンサーデータを読み込み
+  readSensorDataFromD2();
 
   // TFTディスプレイ更新
   if (millis() - lastDisplayUpdateTime > DISPLAY_UPDATE_INTERVAL) {
@@ -239,42 +167,129 @@ void loop() {
 }
 
 // ===================================================================
-// TFTディスプレイ更新関数
+// D-2からセンサーデータを読み込む
+// ===================================================================
+void readSensorDataFromD2() {
+  static unsigned long lastI2CRead = 0;
+  if (millis() - lastI2CRead < 500) return;  // 500ms毎に読み込み
+  lastI2CRead = millis();
+
+  // I2C通信試行
+  Wire.beginTransmission(I2C_ADDR_D2);
+  Wire.write(0x00);
+  if (Wire.endTransmission() != 0) {
+    // リクエスト送信失敗
+    modbusStatus.i2cSuccess = false;
+    modbusStatus.i2cFailureCount++;
+    snprintf(modbusStatus.i2cStatusMessage, sizeof(modbusStatus.i2cStatusMessage), "Req Failed");
+    return;
+  }
+
+  int bytesRead = Wire.requestFrom(I2C_ADDR_D2, 8);
+  if (bytesRead != 8) {
+    // データ受信失敗
+    modbusStatus.i2cSuccess = false;
+    modbusStatus.i2cFailureCount++;
+    snprintf(modbusStatus.i2cStatusMessage, sizeof(modbusStatus.i2cStatusMessage), "Rx Got %d", bytesRead);
+    return;
+  }
+
+  // データ読み込み（リトルエンディアン）
+  uint8_t buffer[8];
+  for (int i = 0; i < 8; i++) {
+    buffer[i] = Wire.read();
+  }
+
+  potentiometer1 = (buffer[1] << 8) | buffer[0];
+  potentiometer2 = (buffer[3] << 8) | buffer[2];
+  batteryVoltage = (buffer[5] << 8) | buffer[4];
+  ultrasonicAlt = (buffer[7] << 8) | buffer[6];
+
+  // I2C通信成功
+  modbusStatus.i2cSuccess = true;
+  modbusStatus.i2cLastSuccessTime = millis();
+  modbusStatus.i2cSuccessCount++;
+  snprintf(modbusStatus.i2cStatusMessage, sizeof(modbusStatus.i2cStatusMessage), "OK");
+
+  Serial.printf("[DISPLAY_D1] I2C OK: Pot1=%d, Pot2=%d, Batt=%d, US_Alt=%d\n",
+                potentiometer1, potentiometer2, batteryVoltage, ultrasonicAlt);
+}
+
+// ===================================================================
+// TFTディスプレイ更新
 // ===================================================================
 void updateDisplay() {
-  // Clear screen and fill with background color
   tft.fillScreen(TFT_GREY);
   tft.setTextColor(TFT_WHITE, TFT_GREY);
 
   // Title
-  tft.drawCentreString("=== FLIGHT DATA ===", 120, 10, 2);
+  tft.drawCentreString("=== FLIGHT DATA ===", 120, 2, 1);
 
-  // ========== Rotation (displayed largest) ==========
+  // ========== Rotation (Smaller size) ==========
   char buf[64];
-  sprintf(buf, "Rotation: %d", displayedRotationCount);
-  tft.drawString(buf, 10, 50, 4);  // Size 4 - large
-  tft.drawString("(rpm)", 10, 100, 2);
-
-  // Potentiometer 1, 2
+  tft.setTextColor(TFT_YELLOW, TFT_GREY);
+  sprintf(buf, "%lu", rotationCount);
+  tft.drawString(buf, 10, 20, 4);  // Smaller than before
+  
   tft.setTextColor(TFT_WHITE, TFT_GREY);
-  sprintf(buf, "Pot1: %d", displaySlave.getPotentiometer1());
-  tft.drawString(buf, 10, 135, 1);
+  tft.drawString("Rotation (rpm)", 10, 60, 1);
 
-  sprintf(buf, "Pot2: %d", displaySlave.getPotentiometer2());
-  tft.drawString(buf, 10, 150, 1);
+  // ========== Potentiometers ==========
+  tft.setTextColor(TFT_CYAN, TFT_GREY);
+  sprintf(buf, "Pot1: %d", potentiometer1);
+  tft.drawString(buf, 10, 80, 1);
 
-  // Battery Voltage
-  sprintf(buf, "Battery: %dmV", displaySlave.getBatteryVoltage());
-  tft.drawString(buf, 10, 170, 1);
+  sprintf(buf, "Pot2: %d", potentiometer2);
+  tft.drawString(buf, 120, 80, 1);
 
-  // Altitude information
-  sprintf(buf, "US Alt: %dm", displaySlave.getUltrasonicAlt());
-  tft.drawString(buf, 10, 190, 1);
-
-  sprintf(buf, "Baro Alt: %dm", displaySlave.getBaroAlt());
-  tft.drawString(buf, 10, 205, 1);
-
-  // Status
+  // ========== Battery ==========
   tft.setTextColor(TFT_GREEN, TFT_GREY);
-  tft.drawString("[Slave ID: 2]", 10, 290, 1);
+  sprintf(buf, "Battery: %dmV", batteryVoltage);
+  tft.drawString(buf, 10, 100, 1);
+
+  // ========== Altitude ==========
+  tft.setTextColor(TFT_ORANGE, TFT_GREY);
+  sprintf(buf, "US Alt: %dm", ultrasonicAlt);
+  tft.drawString(buf, 10, 120, 1);
+
+  sprintf(buf, "Baro: %dm", baroAlt);
+  tft.drawString(buf, 120, 120, 1);
+
+  // ========== I2C (D-2 Sensor) Status ==========
+  tft.drawLine(0, 140, 240, 140, TFT_WHITE);
+  tft.setTextColor(TFT_YELLOW, TFT_GREY);
+  tft.drawString("I2C(D-2):", 10, 150, 1);
+  
+  if (modbusStatus.i2cSuccess) {
+    tft.setTextColor(TFT_GREEN, TFT_GREY);
+  } else {
+    tft.setTextColor(TFT_RED, TFT_GREY);
+  }
+  sprintf(buf, "%s", modbusStatus.i2cStatusMessage);
+  tft.drawString(buf, 100, 150, 1);
+  
+  tft.setTextColor(TFT_WHITE, TFT_GREY);
+  sprintf(buf, "OK:%lu Err:%lu", modbusStatus.i2cSuccessCount, modbusStatus.i2cFailureCount);
+  tft.drawString(buf, 10, 165, 1);
+
+  // ========== Modbus Master Status ==========
+  tft.setTextColor(TFT_YELLOW, TFT_GREY);
+  tft.drawString("Master:", 10, 185, 1);
+  
+  if (modbusStatus.masterCommActive) {
+    tft.setTextColor(TFT_GREEN, TFT_GREY);
+  } else {
+    tft.setTextColor(TFT_ORANGE, TFT_GREY);
+  }
+  sprintf(buf, "%s", modbusStatus.masterStatusMessage);
+  tft.drawString(buf, 100, 185, 1);
+  
+  tft.setTextColor(TFT_WHITE, TFT_GREY);
+  sprintf(buf, "Req: %lu", modbusStatus.masterRequestCount);
+  tft.drawString(buf, 10, 202, 1);
+
+  // ========== Footer ==========
+  tft.drawLine(0, 220, 240, 220, TFT_WHITE);
+  tft.setTextColor(TFT_GREEN, TFT_GREY);
+  tft.drawString("[Slave ID: 2]", 160, 225, 1);
 }

@@ -164,9 +164,7 @@ void testFileIO(fs::FS &fs, const char * path){
 
 void setup(){
     Serial.begin(115200);
-    
-    // シリアルモニタを開くまでの猶予時間を少し設ける（デバッグ用）
-    delay(1000);
+    delay(100);  // 最小限の待機（デバッグ用）
     Serial.println("\n--- SD Card Test Start ---");
 
     // ★重要: XIAO ESP32C3のハードウェアSPIピンを明示的に割り当てる
