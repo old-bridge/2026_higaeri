@@ -7,7 +7,7 @@ const int DATASIZE = 10;
 #define REG_BAUD_CTRL 300
 #define DE_PIN D5
 
-ModbusRTU mb;
+ModbusRTUServer mb;  // Changed from ModbusRTU to ModbusRTUServer for slave role
 HardwareSerial MySerial0(0);
 
 const long BAUDRATES[] = {9600, 38400, 115200, 921600, 5000000};
@@ -87,8 +87,10 @@ void switchToBaud(int idx) {
 // ===================================================================
 void setup() {
   Serial.begin(115200);
-  while (!Serial);
-  delay(1000);
+  // タイムアウト付き待機：USB接続がない場合は5秒でスキップ
+  unsigned long serialWaitStart = millis();
+  while (!Serial && millis() - serialWaitStart < 5000);
+  delay(100);
   Serial.println(F("\n=== MODBUS RTU SLAVE - CORRECTED (NO lastCount) ==="));
 
   pinMode(DE_PIN, OUTPUT);
