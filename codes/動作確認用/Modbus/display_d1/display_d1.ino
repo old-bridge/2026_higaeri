@@ -1,46 +1,29 @@
-// NOTE: Do NOT use USE_CUSTOM_READ_WRITE_FUNCTIONS due to library bug
-// (ModbusRTUClient has no startModbusClient() method in that mode)
-// Instead, we use default API with manual DE_PIN control after each operation
+// display_d1.ino - SLAVE (Modbus RTU Slave, ID = 2)
+// XIAO ESP32C3
+//
+// DE/RE wiring: both DE and /RE of MAX3485 are tied to DE_PIN (same GPIO).
+//   GPIO=HIGH → TX mode (driver on, receiver off)
+//   GPIO=LOW  → RX mode (driver off, receiver on)
+//
+// DE control is handled INSIDE the library (modified defaultSerialWriteFunction):
+//   before serial->write()  : DE = HIGH
+//   after  serial->flush()  : DE = LOW
+// Just call setDEPin(DE_PIN) once. No callbacks needed.
 
+#include <HardwareSerial.h>
 #include <ModbusRTU.h>
 
-#define BAUDRATE 9600UL
-#define DE_PIN 5          // GPIO 5 (D3)
-#define RX_PIN -1         // Default RX
-#define TX_PIN -1         // Default TX
-#define SLAVE_ID 2
-#define REGN_SENSOR 0     // Sensor data registers (0-3: rot, as1, as2, batt)
-#define REGN_CONTROL 10   // Control register
+#define BAUDRATE     9600UL
+#define DE_PIN       5        // GPIO5 = D3
+#define SLAVE_ID     2
+#define REGN_SENSOR  0        // Holding registers 0-3: data
 
-const int datasize = 50;
-
+// UART0 on XIAO ESP32C3: TX=GPIO21(D6), RX=GPIO20(D7)
+HardwareSerial MySerial0(0);
 ModbusRTUServer mb;
-// Use Serial0 (HardwareSerial) instead of Serial (HWCDC)
-// Serial0 = UART 0 (hardware UART on XIAO ESP32C3)
 
-uint16_t holdingRegs[HOLDING_REGISTER_NUM] = {0};
-
-unsigned long lastUpdateTime = 0;
-unsigned long lastStatusTime = 0;
-uint32_t displayCounter = 0;
-
-// DE_PIN control
-void setDETransmit() {
-  digitalWrite(DE_PIN, HIGH);
-  delayMicroseconds(100);
-}
-
-void setDEReceive() {
-  digitalWrite(DE_PIN, LOW);
-  delayMicroseconds(100);
-}
-
-// Helper: Flush serial buffer and switch to receive mode
-void finishTransmission() {
-  Serial0.flush();
-  delayMicroseconds(500);
-  setDEReceive();
-}
+unsigned long lastPrintMs = 0;
+uint32_t loopCount = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -48,41 +31,48 @@ void setup() {
   Serial.println();
   Serial.println("[DISPLAY_D1 SLAVE] Starting...");
 
-  // Initialize serial with EVEN PARITY (Modbus RTU standard)
-  // Use Serial0, not Serial which is HWCDC on ESP32
-  Serial0.begin(BAUDRATE, SERIAL_8E1, RX_PIN, TX_PIN);
+  // Initialize UART0 with Modbus RTU standard format (8E1)
+  MySerial0.begin(BAUDRATE, SERIAL_8E1, -1, -1);
+
+  // Initialize DE pin in receive mode (default)
   pinMode(DE_PIN, OUTPUT);
-  setDEReceive();
+  digitalWrite(DE_PIN, LOW);
 
-  // Initialize Modbus server (slave)
-  mb.startModbusServer(SLAVE_ID, BAUDRATE, Serial0, false);
+  // Initialize Modbus server (slave).
+  // initialize=false because we already called MySerial0.begin().
+  mb.startModbusServer(SLAVE_ID, BAUDRATE, MySerial0, false);
 
-  Serial.printf("[DISPLAY_D1 SLAVE] id=%u baud=%lu de=%u (SERIAL_8E1)\n", SLAVE_ID, BAUDRATE, DE_PIN);
+  // Tell the library which GPIO to use for DE/RE.
+  mb.setDEPin(DE_PIN);
+
+  // Pre-fill holding registers with initial values
+  for (uint16_t i = 0; i < 4; i++) mb.setHoldingValue(REGN_SENSOR + i, 0);
+
+  Serial.printf("[DISPLAY_D1 SLAVE] id=%u  baud=%lu  de=GPIO%d\n", SLAVE_ID, BAUDRATE, DE_PIN);
 }
 
 void loop() {
-  // Process Modbus communication
-  bool newData = mb.communicationLoop();
+  // Update simulated data in holding registers
+  mb.setHoldingValue(REGN_SENSOR + 0, (uint16_t)(millis() / 200) % 1000);
+  mb.setHoldingValue(REGN_SENSOR + 1, (uint16_t)(millis() / 150) % 1000);
+  mb.setHoldingValue(REGN_SENSOR + 2, (uint16_t)(millis() / 300) % 1000);
+  mb.setHoldingValue(REGN_SENSOR + 3, (uint16_t)(millis() / 250) % 1000);
 
-  // Update display data from registers (updated by master writes)
-  if (millis() - lastUpdateTime >= 500) {
-    lastUpdateTime = millis();
-    displayCounter++;
+  // Process incoming Modbus request (non-blocking when idle).
+  // The library now handles DE automatically inside defaultSerialWriteFunction.
+  mb.communicationLoop();
 
-    uint16_t rot = 0, as1 = 0, as2 = 0, batt = 0;
-    mb.copyFromHoldingRegisters(&rot, 1, REGN_SENSOR + 0);
-    mb.copyFromHoldingRegisters(&as1, 1, REGN_SENSOR + 1);
-    mb.copyFromHoldingRegisters(&as2, 1, REGN_SENSOR + 2);
-    mb.copyFromHoldingRegisters(&batt, 1, REGN_SENSOR + 3);
-
-    // TODO: Update TFT display with sensor data
-    Serial.printf("[DISPLAY_D1 SLAVE] display_count=%lu rot=%u as1=%u as2=%u batt=%u\n",
-      (unsigned long)displayCounter, rot, as1, as2, batt);
+  // Print current register values periodically
+  if (millis() - lastPrintMs >= 2000) {
+    lastPrintMs = millis();
+    Serial.printf("[DISPLAY_D1 SLAVE] regs: %u %u %u %u\n",
+      mb.getHoldingValue(REGN_SENSOR + 0),
+      mb.getHoldingValue(REGN_SENSOR + 1),
+      mb.getHoldingValue(REGN_SENSOR + 2),
+      mb.getHoldingValue(REGN_SENSOR + 3));
   }
 
-  // Print status periodically
-  if (millis() - lastStatusTime >= 5000) {
-    lastStatusTime = millis();
-    Serial.printf("[DISPLAY_D1 SLAVE] status displays=%lu\n", (unsigned long)displayCounter);
+  if (++loopCount % 50000 == 0) {
+    Serial.printf("[DISPLAY_D1 SLAVE] alive  loop=%lu\n", (unsigned long)loopCount);
   }
 }

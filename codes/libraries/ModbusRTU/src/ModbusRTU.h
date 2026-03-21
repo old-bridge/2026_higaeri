@@ -1,3 +1,6 @@
+#ifndef MODBUS_RTU_H
+#define MODBUS_RTU_H
+
 #include <Arduino.h>
 #include <ctype.h>
 #include <string.h>
@@ -79,6 +82,7 @@ typedef union {
         uint32_t transactionTimeout;
         uint32_t responseTimeout;
         bool acceptException; //If true, 5-bytes long transaction will be considered valid, for it may be Modbus exception response
+        int8_t dePin;  // RS485 DE/RE direction pin. -1 = not used.
 
         /**
          * @brief Sets transaction timeout according to number of expected bytes (excluding CRC)
@@ -143,7 +147,7 @@ class ModbusRTU{
     uint8_t deviceAddress;
 
     #if !USE_CUSTOM_READ_WRITE_FUNCTIONS
-    SerialCtx defaultSerialCtx{NULL, 0, 0, false};
+    SerialCtx defaultSerialCtx{NULL, 0, 0, 0, false, -1};
     SerialCtx* serialReadCtx = &defaultSerialCtx;
     SerialCtx* serialWriteCtx = &defaultSerialCtx;
     uint8_t (*serialReadFunction)(char* buffer, uint8_t length, SerialCtx* ctx) = defaultSerialReadFunction;
@@ -208,6 +212,17 @@ class ModbusRTU{
     bool calculateCRC(volatile uint8_t* packetData, uint16_t length, bool append_crc);
     void sendData(volatile uint8_t* packetData, uint8_t length);
     uint8_t recvData(volatile uint8_t* data, uint8_t length);
+
+    #if !USE_CUSTOM_READ_WRITE_FUNCTIONS
+    public:
+    /**
+     * @brief Sets the RS485 DE/RE direction control pin.
+     * When set, the library will automatically raise DE before sending
+     * and drop DE (after flush) when transmission completes.
+     * @param pin GPIO pin number connected to DE (/RE). Pass -1 to disable.
+     */
+    void setDEPin(int8_t pin) { defaultSerialCtx.dePin = pin; }
+    #endif
 };
 
 /**
@@ -293,7 +308,7 @@ class ModbusRTUServer: public ModbusRTU{
      * @param initialize If true, serial port will be initialized in this function (default: true)
      * @note Function sets the length of expected bytes to MODBUS_REQUEST_BASE_LENGTH
      */
-    void startModbusServer(uint16_t address, uint32_t baudRate, HardwareSerial& serialPort = Serial, bool initialize = true){
+    void startModbusServer(uint16_t address, uint32_t baudRate, HardwareSerial& serialPort, bool initialize = true){
         start(address, baudRate, serialPort, initialize);
         defaultSerialCtx.setTransTimeout(MODBUS_REQUEST_BASE_LENGTH);    
     }
@@ -387,7 +402,7 @@ class ModbusRTUClient: public ModbusRTU{
      * @param serialPort HardwareSerial port to be used (default: Serial)
      * @param initialize If true, serial port will be initialized in this function (default: true)
      */
-    void startModbusClient(uint16_t address, uint32_t baudRate, HardwareSerial& serialPort = Serial, bool initialize = true){
+    void startModbusClient(uint16_t address, uint32_t baudRate, HardwareSerial& serialPort, bool initialize = true){
         start(address, baudRate, serialPort, initialize);
         defaultSerialCtx.acceptException = true;
     }
@@ -450,3 +465,4 @@ class ModbusRTUClient: public ModbusRTU{
 
 
 
+#endif  // MODBUS_RTU_H

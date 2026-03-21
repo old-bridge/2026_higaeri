@@ -1,89 +1,93 @@
-// NOTE: Do NOT use USE_CUSTOM_READ_WRITE_FUNCTIONS due to library bug
-// (ModbusRTUClient has no startModbusClient() method in that mode)
-// Instead, we use default API with manual DE_PIN control after each operation
+// logger.ino - MASTER (Modbus RTU Master)
+// XIAO ESP32C3
+//
+// DE/RE wiring: both DE and /RE of MAX3485 are tied to DE_PIN (same GPIO).
+//   GPIO=HIGH → TX mode (driver on, receiver off)
+//   GPIO=LOW  → RX mode (driver off, receiver on)
+//
+// DE control is handled INSIDE the library (modified defaultSerialWriteFunction):
+//   before serial->write()  : DE = HIGH
+//   after  serial->flush()  : DE = LOW
+// Just call setDEPin(DE_PIN) once and the library does the rest.
 
+#include <HardwareSerial.h>
 #include <ModbusRTU.h>
 
-#define BAUDRATE 9600UL
-#define DE_PIN 4          // GPIO 4 (D2)
-#define RX_PIN -1         // Default RX
-#define TX_PIN -1         // Default TX
-#define SLAVE_ID 1
-#define REGN_SENSOR 0     // Sensor data registers (0-3: rot, as1, as2, batt)
-#define REGN_CONTROL 10   // Control register
+#define BAUDRATE          9600UL
+#define DE_PIN            4       // GPIO4 = D2
+#define SLAVE_ID_AIR_DATA 1
+#define SLAVE_ID_DISPLAY  2
+#define REGN_SENSOR       0       // Holding registers 0-3: sensor data
+#define SENSOR_DATA_SIZE  4
+#define LED_PIN D0
 
-const int datasize = 50;
+// UART0 on XIAO ESP32C3: TX=GPIO21(D6), RX=GPIO20(D7)
+// Use -1,-1 to select UART0 default pins.
+HardwareSerial MySerial0(0);
 
-ModbusRTUServer mb;
-// Use Serial0 (HardwareSerial) instead of Serial (HWCDC)
-// Serial0 = UART 0 (hardware UART on XIAO ESP32C3)
+ModbusRTUClient mbAirData;  // Talks to air_data (Slave ID=1)
+ModbusRTUClient mbDisplay;  // Talks to display_d1 (Slave ID=2)
 
-uint16_t holdingRegs[HOLDING_REGISTER_NUM] = {0};
+// Read SENSOR_DATA_SIZE holding registers from a slave. Returns true on success.
+uint16_t g_readBuf[SENSOR_DATA_SIZE] = {0};
 
-unsigned long lastLogTime = 0;
-unsigned long lastStatusTime = 0;
-uint32_t logCounter = 0;
-
-// DE_PIN control
-void setDETransmit() {
-  digitalWrite(DE_PIN, HIGH);
-  delayMicroseconds(100);
+bool readFromSlave(ModbusRTUClient& mb, uint16_t reg, uint16_t count, uint16_t* buf) {
+  return mb.ReadHoldingRegisters(reg, count, buf, 200000UL, false) == 0;
 }
 
-void setDEReceive() {
-  digitalWrite(DE_PIN, LOW);
-  delayMicroseconds(100);
-}
-
-// Helper: Flush serial buffer and switch to receive mode
-void finishTransmission() {
-  Serial0.flush();
-  delayMicroseconds(500);
-  setDEReceive();
-}
+// -------------------------------------------------------------------
+unsigned long lastReadMs = 0;
+uint32_t cycleCount = 0;
 
 void setup() {
   Serial.begin(115200);
   delay(300);
   Serial.println();
-  Serial.println("[LOGGER SLAVE] Starting...");
+  Serial.println("[LOGGER MASTER] Starting...");
 
-  // Initialize serial with EVEN PARITY (Modbus RTU standard)
-  // Use Serial0, not Serial which is HWCDC on ESP32
-  Serial0.begin(BAUDRATE, SERIAL_8E1, RX_PIN, TX_PIN);
+  // Initialize UART0 with Modbus RTU standard format (8E1)
+  MySerial0.begin(BAUDRATE, SERIAL_8E1, -1, -1);
+
+  // Initialize DE pin in receive mode
   pinMode(DE_PIN, OUTPUT);
-  setDEReceive();
+  digitalWrite(DE_PIN, LOW);
 
-  // Initialize Modbus server (slave)
-  mb.startModbusServer(SLAVE_ID, BAUDRATE, Serial0, false);
+  // Initialize Modbus clients.
+  // initialize=false because we already called MySerial0.begin().
+  mbAirData.startModbusClient(SLAVE_ID_AIR_DATA, BAUDRATE, MySerial0, false);
+  mbDisplay.startModbusClient(SLAVE_ID_DISPLAY,  BAUDRATE, MySerial0, false);
 
-  Serial.printf("[LOGGER SLAVE] id=%u baud=%lu de=%u (SERIAL_8E1)\n", SLAVE_ID, BAUDRATE, DE_PIN);
+  // Tell each client which GPIO to use for DE/RE control.
+  // The library's defaultSerialWriteFunction will now handle:
+  //   DE=HIGH before write, flush(), DE=LOW after transmission.
+  mbAirData.setDEPin(DE_PIN);
+  mbDisplay.setDEPin(DE_PIN);
+
+  Serial.printf("[LOGGER MASTER] baud=%lu  de=GPIO%d  air_data=SlaveID%d  display=SlaveID%d\n",
+    BAUDRATE, DE_PIN, SLAVE_ID_AIR_DATA, SLAVE_ID_DISPLAY);
 }
 
 void loop() {
-  // Process Modbus communication
-  bool newData = mb.communicationLoop();
+  if (millis() - lastReadMs < 1000) return;
+  lastReadMs = millis();
+  cycleCount++;
+  Serial.printf("\n[LOGGER MASTER] ===== cycle %lu =====\n", (unsigned long)cycleCount);
 
-  // Log sensor data from registers (updated by master writes)
-  if (millis() - lastLogTime >= 1000) {
-    lastLogTime = millis();
-    logCounter++;
-
-    uint16_t rot = 0, as1 = 0, as2 = 0, batt = 0;
-    mb.copyFromHoldingRegisters(&rot, 1, REGN_SENSOR + 0);
-    mb.copyFromHoldingRegisters(&as1, 1, REGN_SENSOR + 1);
-    mb.copyFromHoldingRegisters(&as2, 1, REGN_SENSOR + 2);
-    mb.copyFromHoldingRegisters(&batt, 1, REGN_SENSOR + 3);
-
-    Serial.printf("[LOGGER SLAVE] log_count=%lu rot=%u as1=%u as2=%u batt=%u\n",
-      (unsigned long)logCounter, rot, as1, as2, batt);
-
-    // TODO: Write to SD card
+  // --- Read air_data slave (ID=1) ---
+  if (readFromSlave(mbAirData, REGN_SENSOR, SENSOR_DATA_SIZE, g_readBuf)) {
+    Serial.printf("[LOGGER MASTER] air_data  rot=%u  as1=%u  as2=%u  batt=%u\n",
+      g_readBuf[0], g_readBuf[1], g_readBuf[2], g_readBuf[3]);
+  } else {
+    Serial.println("[LOGGER MASTER] air_data  READ FAILED");
   }
 
-  // Print status periodically
-  if (millis() - lastStatusTime >= 5000) {
-    lastStatusTime = millis();
-    Serial.printf("[LOGGER SLAVE] status logs=%lu\n", (unsigned long)logCounter);
+  delay(20);  // Inter-message gap (let bus settle)
+
+  // --- Read display_d1 slave (ID=2) ---
+  if (readFromSlave(mbDisplay, REGN_SENSOR, SENSOR_DATA_SIZE, g_readBuf)) {
+    Serial.printf("[LOGGER MASTER] display   d0=%u  d1=%u  d2=%u  d3=%u\n",
+      g_readBuf[0], g_readBuf[1], g_readBuf[2], g_readBuf[3]);
+  } else {
+    Serial.println("[LOGGER MASTER] display   READ FAILED");
   }
 }

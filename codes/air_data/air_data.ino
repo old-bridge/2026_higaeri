@@ -10,6 +10,14 @@
  * - ロガーマイコンからの制御コマンド受け取り（LED等）
  */
 
+// 公式ドキュメントに基づく USBシリアル + UART0/UART1 同時使用
+// https://wiki.seeedstudio.com/xiao_esp32c3_getting_started/
+#include <HardwareSerial.h>
+
+// Define hardware serial mapped to internal UARTs
+HardwareSerial MySerial0(0);  // UART0 - Modbus RS485イン
+HardwareSerial MySerial1(1);  // UART1 - 予約（将来拡張用）
+
 #include "pins.h"
 
 #define ENCODER_PIN D1         // ロータリーエンコーダのパルスピン
@@ -136,7 +144,8 @@ public:
 };
 
 // グローバルインスタンス
-AirDataSlave airDataSlave(&Serial0, SLAVE_ID_AIR_DATA, DE_PIN);
+// MySerial0 は air_data.ino グローバルスコープで定義
+AirDataSlave airDataSlave(&MySerial0, SLAVE_ID_AIR_DATA, DE_PIN);
 
 // ===================================================================
 // ロータリーエンコーダ割り込みハンドラ
@@ -149,6 +158,21 @@ void IRAM_ATTR encoderISR() {
 // セットアップ
 // ===================================================================
 void setup() {
+  // ==== USB Serial （シリアルモニター用）====
+  Serial.begin(115200);
+  delay(100);  // USB CDCの初期化を待つ
+  Serial.println("\n\n========== air_data.ino starting ==========");
+  
+  // ==== MySerial0 （Modbus RS485用 - UART0）====
+  // RX: D7 (GPIO5), TX: D6 (GPIO4) - XIAO ESP32C3 の UART0 デフォルトピン
+  MySerial0.begin(9600, SERIAL_8N1, 5, 4);
+  Serial.println("[SETUP] MySerial0 initialized on UART0 (9600 baud)");
+  
+  // ==== MySerial1 （予約 - UART1）====
+  // RX: D9 (GPIO9), TX: D10 (GPIO8)
+  // MySerial1.begin(115200, SERIAL_8N1, 9, 10);
+  // Serial.println("[SETUP] MySerial1 initialized on UART1 (115200 baud)");
+  
   // ロータリーエンコーダの初期化
   pinMode(ENCODER_PIN, INPUT_PULLUP);
   pinMode(LED_PIN, OUTPUT);

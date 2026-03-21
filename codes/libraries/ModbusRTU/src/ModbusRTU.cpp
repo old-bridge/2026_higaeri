@@ -68,10 +68,10 @@ uint8_t ModbusRTU::recvData(volatile uint8_t* data, uint8_t length){
 #if !USE_CUSTOM_READ_WRITE_FUNCTIONS
     void ModbusRTU::start(uint16_t address, uint32_t baudRate, HardwareSerial& serialPort, bool initialize){
         this->deviceAddress = address;
-        defaultSerialCtx.serial = &Serial;
+        defaultSerialCtx.serial = &serialPort;
         if (initialize == true){
-            Serial.begin(baudRate, SERIAL_8E1);
-            Serial.setTimeout(1);
+            serialPort.begin(baudRate, SERIAL_8E1);
+            serialPort.setTimeout(1);
         }
         //Calculate timeout based on baud rate in microseconds
         defaultSerialCtx.byteTransTime = ((int)ceil(1000000 / baudRate)) * (1 + 8 + 1 + 1); //1 start bit + 8 data bits + parity + 1 stop bit
@@ -424,8 +424,11 @@ int ModbusRTUClient::WriteMultipleRegisters(uint16_t firstRegister, uint16_t reg
                 //Overflow occurred
                 currentTimestamp += UINT32_MAX;
             }
-        } while (currentTimestamp - lastTimestamp < currentCtx->responseTimeout && 
-            (bytesDetected = !!currentCtx->serial->available()) == false);
+        // NOTE: operand order matters for short-circuit evaluation.
+    // available() must be evaluated FIRST so bytesDetected is set even when
+    // responseTimeout==0 (non-blocking server mode).
+    } while ((bytesDetected = !!currentCtx->serial->available()) == false &&
+            currentTimestamp - lastTimestamp < currentCtx->responseTimeout);
 
         //No bytes detected
         if (bytesDetected == false){
@@ -468,6 +471,13 @@ int ModbusRTUClient::WriteMultipleRegisters(uint16_t firstRegister, uint16_t reg
      * @param currentCtx Serial port context
      */
     void defaultSerialWriteFunction(const char* buffer, uint8_t length, SerialCtx* currentCtx){
+        if (currentCtx->dePin >= 0) {
+            digitalWrite(currentCtx->dePin, HIGH);  // enable RS485 driver (TX mode)
+        }
         currentCtx->serial->write((const uint8_t*)buffer, length);
+        if (currentCtx->dePin >= 0) {
+            currentCtx->serial->flush();            // block until all bits physically sent
+            digitalWrite(currentCtx->dePin, LOW);   // disable RS485 driver (RX mode)
+        }
     }
 #endif

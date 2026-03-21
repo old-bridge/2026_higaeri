@@ -1,3 +1,4 @@
+#include <HardwareSerial.h>
 #include <ModbusRTU.h>
 
 const int DATASIZE = 10;
@@ -72,7 +73,7 @@ void switchToBaud(int idx) {
   MySerial0.flush();
   MySerial0.end();
   delay(200);  // Increased for stability
-  MySerial0.begin(baud, SERIAL_8N1, -1, -1);
+  MySerial0.begin(baud, SERIAL_8N1, 5, 4);  // RX: D7(GPIO5), TX: D6(GPIO4)
   delay(200);
 
   // Reset RS485 transceiver
@@ -96,7 +97,7 @@ void setup() {
   pinMode(DE_PIN, OUTPUT);
   digitalWrite(DE_PIN, LOW);
 
-  MySerial0.begin(9600, SERIAL_8N1, -1, -1);
+  switchToBaud(0);  // Initialize to 9600 baud
   mb.begin(&MySerial0, DE_PIN);
   mb.slave(SLAVE_ID);
 

@@ -1,3 +1,4 @@
+#include <HardwareSerial.h>
 #include <ModbusRTU.h>
 
 const int DATASIZE = 10;
@@ -72,7 +73,7 @@ void switchToBaud(int idx) {
   delay(20);  // Critical
   MySerial0.end();
   delay(50);
-  MySerial0.begin(baud, SERIAL_8N1, -1, -1);
+  MySerial0.begin(baud, SERIAL_8N1, 5, 4);  // RX: D7(GPIO5), TX: D6(GPIO4)
   delay(50);
 
   // DO NOT call mb.begin() again — it breaks internal state

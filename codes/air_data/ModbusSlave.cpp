@@ -60,7 +60,7 @@ void ModbusSlaveBase::changeBaud(int baudIdx) {
   serial->flush();
   serial->end();
   delay(200);
-  serial->begin(newBaud, SERIAL_8N1, -1, -1);
+  serial->begin(newBaud, SERIAL_8N1, 5, 4);  // RX: D7(GPIO5), TX: D6(GPIO4)
   delay(200);
 
   // トランシーバーリセット

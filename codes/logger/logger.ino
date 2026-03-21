@@ -12,6 +12,12 @@
  * - ボーレート動的切り替え制御
  */
 
+// 公式ドキュメントに基づく USBシリアル + UART0/UART1 同時使用
+#include <HardwareSerial.h>
+
+// Define hardware serial mapped to internal UARTs
+HardwareSerial MySerial0(0);  // UART0 - Modbus RS485イン
+
 #define DE_PIN D2  // RS485制御ピン
 #define LED_PIN D1  // LED制御ピン
 
@@ -27,7 +33,8 @@
 // グローバル変数
 // ===================================================================
 
-ModbusMaster master(&Serial0, DE_PIN);
+// MySerial0 は logger.ino グローバルスコープで定義
+ModbusMaster master(&MySerial0, DE_PIN);
 
 // センサー値バッファ
 uint16_t airDataBuf[AIR_REG_READ_SIZE];          // エアデータから読む
@@ -64,9 +71,15 @@ struct WriteStatus {
 // セットアップ
 // ===================================================================
 void setup() {
+  // ==== USB Serial （シリアルモニター用）====
   Serial.begin(115200);
   delay(100);  // 最小限の待機（デバッグ用）
   Serial.println("\n--- Logger Start ---");
+  
+  // ==== MySerial0 （Modbus RS485用 - UART0）====
+  // RX: D7 (GPIO5), TX: D6 (GPIO4) - XIAO ESP32C3 の UART0 デフォルトピン
+  MySerial0.begin(9600, SERIAL_8N1, 5, 4);
+  Serial.println("[LOGGER] MySerial0 initialized on UART0 (9600 baud)");
 
   // LEDピン初期化
   Serial.println("[LOGGER] Initializing LED pin...");
