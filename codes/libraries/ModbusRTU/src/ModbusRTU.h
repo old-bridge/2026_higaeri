@@ -1,6 +1,3 @@
-#ifndef MODBUS_RTU_H
-#define MODBUS_RTU_H
-
 #include <Arduino.h>
 #include <ctype.h>
 #include <string.h>
@@ -308,7 +305,7 @@ class ModbusRTUServer: public ModbusRTU{
      * @param initialize If true, serial port will be initialized in this function (default: true)
      * @note Function sets the length of expected bytes to MODBUS_REQUEST_BASE_LENGTH
      */
-    void startModbusServer(uint16_t address, uint32_t baudRate, HardwareSerial& serialPort, bool initialize = true){
+    void startModbusServer(uint16_t address, uint32_t baudRate, HardwareSerial& serialPort = Serial, bool initialize = true){
         start(address, baudRate, serialPort, initialize);
         defaultSerialCtx.setTransTimeout(MODBUS_REQUEST_BASE_LENGTH);    
     }
@@ -402,7 +399,7 @@ class ModbusRTUClient: public ModbusRTU{
      * @param serialPort HardwareSerial port to be used (default: Serial)
      * @param initialize If true, serial port will be initialized in this function (default: true)
      */
-    void startModbusClient(uint16_t address, uint32_t baudRate, HardwareSerial& serialPort, bool initialize = true){
+    void startModbusClient(uint16_t address, uint32_t baudRate, HardwareSerial& serialPort = Serial, bool initialize = true){
         start(address, baudRate, serialPort, initialize);
         defaultSerialCtx.acceptException = true;
     }
@@ -465,4 +462,3 @@ class ModbusRTUClient: public ModbusRTU{
 
 
 
-#endif  // MODBUS_RTU_H
