@@ -1,0 +1,816 @@
+/**
+ * logger.ino
+ * ロガーマイコン（Modbus Master）
+ * 
+ * 機能：
+ * - エアデータマイコンからセンサーデータを読み込み（Slave ID: 1）
+ * - Display D-1からデータを読み込み（Slave ID: 2）
+ * - MicroSD に全データをログ記録
+ * - IMU から姿勢データを読む（I2C）
+ */
+
+#include <ModbusRTU.h>
+#include "FS.h"
+#include "SD.h"
+#include "SPI.h"
+#include <Adafruit_BNO08x.h>
+
+// ===================================================================
+// 通信設定
+// ===================================================================
+#define BAUDRATE 5000000  // Modbus通信ボーレート
+#define DE_PIN D2          // RS485 ドライバーイネーブル
+#define LED_PIN D1         // LED制御ピン
+
+// Modbus Slave IDs
+#define SLAVE_ID_AIR_DATA 1
+#define SLAVE_ID_DISPLAY_D1 2
+
+// レジスタアドレス
+#define AIR_DATA_REG_READ 0    // エアデータ読み込みレジスタ
+#define AIR_DATA_REG_SIZE 4
+#define DISPLAY_D1_REG_READ 0  // Display D-1 読み込みレジスタ
+#define DISPLAY_D1_REG_SIZE 3
+
+// ===================================================================
+// ピン定義（IMU用）
+// ===================================================================
+#define BNO08X_CS 3
+#define BNO08X_INT -1
+#define BNO08X_RESET -1
+
+// ===================================================================
+// グローバル変数
+// ===================================================================
+ModbusRTUClient mb;
+HardwareSerial serial0(0);
+
+// Modbus通信状況
+struct ModbusCommStatus {
+  bool airDataConnected = false;
+  unsigned long airDataLastSuccessTime = 0;
+  uint32_t airDataSuccessCount = 0;
+  uint32_t airDataFailureCount = 0;
+  
+  bool displayD1Connected = false;
+  unsigned long displayD1LastSuccessTime = 0;
+  uint32_t displayD1SuccessCount = 0;
+  uint32_t displayD1FailureCount = 0;
+  
+  unsigned long lastSummaryTime = 0;
+  const unsigned long SUMMARY_INTERVAL = 5000;
+} modbusStatus;
+
+// センサーバッファ
+uint16_t airDataBuf[AIR_DATA_REG_SIZE] = {0};
+uint16_t displayD1Buf[DISPLAY_D1_REG_SIZE] = {0};
+uint16_t potentiometer1 = 0;
+uint16_t potentiometer2 = 0;
+
+// IMU関連
+Adafruit_BNO08x bno08x(BNO08X_RESET);
+struct euler_t {
+  float yaw = 0;
+  float pitch = 0;
+  float roll = 0;
+} imuData;
+
+// LED制御
+uint16_t ledControlValue = 0;
+unsigned long ledLastToggleTime = 0;
+const unsigned long LED_BLINK_INTERVAL = 500;
+static bool ledBlinkState = false;
+
+// SD カード
+const char* LOG_FILE = "/flight_log.csv";
+bool sdCardReady = false;
+
+// ===================================================================
+// セットアップ
+// ===================================================================
+void setup() {
+  // デバッグシリアル
+  Serial.begin(BAUDRATE);
+  delay(100);
+  Serial.println("\n--- Logger Start ---");
+
+  // LED初期化
+  Serial.println("[LOGGER] Initializing LED pin...");
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  // SPI初期化
+  Serial.println("[LOGGER] Initializing SPI...");
+  SPI.begin(8, 9, 10, 5);  // SCK=8, MISO=9, MOSI=10, CS=5
+
+  // Modbus初期化
+  Serial.println("[LOGGER] Initializing Modbus...");
+  serial0.begin(BAUDRATE, SERIAL_8N1, -1, -1);  // デフォルトRX/TXピン
+  mb.begin(&serial0, DE_PIN);
+  mb.master();
+  Serial.println("[LOGGER] Modbus initialized as Master");
+
+  // Modbus状態初期化
+  modbusStatus.airDataLastSuccessTime = millis();
+  modbusStatus.displayD1LastSuccessTime = millis();
+  modbusStatus.lastSummaryTime = millis();
+
+  // SD初期化
+  initSDCard();
+
+  // IMU初期化
+  Serial.println("[LOGGER] Initializing BNO085 IMU...");
+  if (!bno08x.begin_SPI(BNO08X_CS, BNO08X_INT)) {
+    Serial.println("[LOGGER] Failed to initialize BNO085");
+  } else {
+    Serial.println("[LOGGER] BNO085 initialized successfully");
+    if (!bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 5000)) {
+      Serial.println("[LOGGER] Could not enable BNO085 report");
+    }
+  }
+
+  Serial.println("[LOGGER] All systems initialized - Ready!");
+}
+
+// ===================================================================
+// ループ
+// ===================================================================
+unsigned long lastReadTime = 0;
+const unsigned long READ_INTERVAL = 1000;
+
+void loop() {
+  // Modbus タスク（常に実行）
+  mb.task();
+
+  // 定期的にデータを読み込み
+  if (millis() - lastReadTime > READ_INTERVAL) {
+    lastReadTime = millis();
+
+    // エアデータマイコンから読む
+    if (mb.readHreg(SLAVE_ID_AIR_DATA, AIR_DATA_REG_READ, airDataBuf, AIR_DATA_REG_SIZE)) {
+      Serial.printf("[LOGGER] Air Data OK: Rotation=%d, AS5600_1=%d, AS5600_2=%d, Batt=%d\n",
+                    airDataBuf[0], airDataBuf[1], airDataBuf[2], airDataBuf[3]);
+      modbusStatus.airDataConnected = true;
+      modbusStatus.airDataLastSuccessTime = millis();
+      modbusStatus.airDataSuccessCount++;
+    } else {
+      Serial.println("[LOGGER] FAILED to read Air Data");
+      modbusStatus.airDataConnected = false;
+      modbusStatus.airDataFailureCount++;
+      memset(airDataBuf, 0, sizeof(airDataBuf));
+    }
+
+    // Display D-1から読む
+    if (mb.readHreg(SLAVE_ID_DISPLAY_D1, DISPLAY_D1_REG_READ, displayD1Buf, DISPLAY_D1_REG_SIZE)) {
+      potentiometer1 = displayD1Buf[1];
+      potentiometer2 = displayD1Buf[2];
+      Serial.printf("[LOGGER] Display D-1 OK: Baro_Alt=%d, Pot1=%d, Pot2=%d\n",
+                    displayD1Buf[0], potentiometer1, potentiometer2);
+      modbusStatus.displayD1Connected = true;
+      modbusStatus.displayD1LastSuccessTime = millis();
+      modbusStatus.displayD1SuccessCount++;
+    } else {
+      Serial.println("[LOGGER] FAILED to read Display D-1");
+      modbusStatus.displayD1Connected = false;
+      modbusStatus.displayD1FailureCount++;
+      memset(displayD1Buf, 0, sizeof(displayD1Buf));
+      potentiometer1 = 0;
+      potentiometer2 = 0;
+    }
+
+    // IMUから読む
+    readIMUData();
+
+    // ログに記録
+    if (sdCardReady) {
+      logFlightData();
+    }
+
+    // Modbus状況表示
+    printModbusStatus();
+  }
+
+  // LED制御
+  updateLoggerLED();
+}
+
+// ===================================================================
+// IMU / ユーティリティ関数
+// ===================================================================
+
+void quaternionToEuler(float qr, float qi, float qj, float qk, euler_t* ypr, bool degrees = false) {
+  float sqr = sq(qr);
+  float sqi = sq(qi);
+  float sqj = sq(qj);
+  float sqk = sq(qk);
+
+  ypr->yaw = atan2(2.0 * (qi * qj + qk * qr), (sqi - sqj - sqk + sqr));
+  ypr->pitch = asin(-2.0 * (qi * qk - qj * qr) / (sqi + sqj + sqk + sqr));
+  ypr->roll = atan2(2.0 * (qj * qk + qi * qr), (-sqi - sqj + sqk + sqr));
+
+  if (degrees) {
+    ypr->yaw *= RAD_TO_DEG;
+    ypr->pitch *= RAD_TO_DEG;
+    ypr->roll *= RAD_TO_DEG;
+  }
+}
+
+void readIMUData() {
+  if (bno08x.wasReset()) {
+    if (!bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 5000)) {
+      Serial.println("[LOGGER] Could not re-enable IMU report after reset");
+    }
+  }
+
+  sh2_SensorValue_t sensorValue;
+  if (bno08x.getSensorEvent(&sensorValue)) {
+    if (sensorValue.sensorId == SH2_ARVR_STABILIZED_RV) {
+      quaternionToEuler(sensorValue.un.arvrStabilizedRV.real,
+                       sensorValue.un.arvrStabilizedRV.i,
+                       sensorValue.un.arvrStabilizedRV.j,
+                       sensorValue.un.arvrStabilizedRV.k,
+                       &imuData, true);
+    }
+  }
+}
+
+void printModbusStatus() {
+  if (millis() - modbusStatus.lastSummaryTime < modbusStatus.SUMMARY_INTERVAL) {
+    return;
+  }
+  modbusStatus.lastSummaryTime = millis();
+
+  Serial.println("\n[MODBUS_STATUS]");
+  Serial.printf("  Air Data (ID:1): %s | OK:%lu Err:%lu\n",
+                modbusStatus.airDataConnected ? "CONNECTED" : "DISCONNECTED",
+                modbusStatus.airDataSuccessCount, modbusStatus.airDataFailureCount);
+  Serial.printf("  Display D-1 (ID:2): %s | OK:%lu Err:%lu\n",
+                modbusStatus.displayD1Connected ? "CONNECTED" : "DISCONNECTED",
+                modbusStatus.displayD1SuccessCount, modbusStatus.displayD1FailureCount);
+
+  bool allOK = modbusStatus.airDataConnected && modbusStatus.displayD1Connected;
+  Serial.printf("  Overall: %s\n\n", allOK ? "✓ ALL CONNECTED" : "✗ DISCONNECTED");
+}
+
+// ===================================================================
+// SD カード関数
+// ===================================================================
+
+void initSDCard() {
+  Serial.println("[LOGGER] Initializing SD card...");
+
+  if (!SD.begin(5)) {
+    Serial.println("[LOGGER] Card Mount Failed");
+    sdCardReady = false;
+    return;
+  }
+
+  Serial.println("[LOGGER] SD Card initialized");
+
+  // ログファイルにヘッダを書き込み
+  if (!SD.exists(LOG_FILE)) {
+    File file = SD.open(LOG_FILE, FILE_WRITE);
+    if (file) {
+      file.println("Timestamp,Rotation,AS5600_1,AS5600_2,Battery,Baro_Alt,UltrasonicAlt,Roll,Pitch,Yaw,Pot1,Pot2");
+      file.close();
+      Serial.printf("[LOGGER] Created log file: %s\n", LOG_FILE);
+    }
+  }
+
+  sdCardReady = true;
+  Serial.println("[LOGGER] SD card ready");
+}
+
+void logFlightData() {
+  if (!sdCardReady) return;
+
+  char logEntry[512];
+  unsigned long ts = millis();
+
+  snprintf(logEntry, sizeof(logEntry), "%lu,%u,%u,%u,%u,%u,0,%.2f,%.2f,%.2f,%u,%u\n",
+          ts,
+          airDataBuf[0],    // Rotation
+          airDataBuf[1],    // AS5600_1
+          airDataBuf[2],    // AS5600_2
+          airDataBuf[3],    // Battery
+          displayD1Buf[0],  // Baro_Alt
+          // 0               // UltrasonicAlt
+          imuData.roll, imuData.pitch, imuData.yaw,
+          potentiometer1, potentiometer2);
+
+  File file = SD.open(LOG_FILE, FILE_APPEND);
+  if (file) {
+    file.print(logEntry);
+    file.close();
+    Serial.printf("[LOGGER] Log written: %s", logEntry);
+  }
+}
+
+void updateLoggerLED() {
+  if (modbusStatus.airDataConnected && modbusStatus.displayD1Connected) {
+    // 成功：点滅
+    unsigned long currentTime = millis();
+    if (currentTime - ledLastToggleTime >= LED_BLINK_INTERVAL) {
+      ledLastToggleTime = currentTime;
+      ledBlinkState = !ledBlinkState;
+      digitalWrite(LED_PIN, ledBlinkState ? HIGH : LOW);
+    }
+  } else {
+    // エラー：常時点灯
+    digitalWrite(LED_PIN, HIGH);
+  }
+}
+
+// センサー値バッファ
+uint16_t airDataBuf[AIR_REG_READ_SIZE];          // エアデータから読む
+uint16_t displayD1Buf[DISP_D1_REG_READ_SIZE];   // Display D-1から読む
+
+// グローバル変数（ポテンショメータ）
+uint16_t potentiometer1 = 0;
+uint16_t potentiometer2 = 0;
+
+// IMU関連
+Adafruit_BNO08x bno08x(BNO08X_RESET);
+sh2_SensorValue_t sensorValue;
+
+// 姿勢角データ構造体
+struct euler_t {
+  float yaw;
+  float pitch;
+  float roll;
+} imuData = {0, 0, 0};
+
+// IMU読み込み設定
+sh2_SensorId_t reportType = SH2_ARVR_STABILIZED_RV;
+long reportIntervalUs = 5000;  // 5ms = 200Hz
+
+unsigned long lastReadTime = 0;
+const unsigned long READ_INTERVAL = 1000;   // 1秒ごと
+
+// 送信用バッファ
+uint16_t rotationCountToSend = 0;  // display_d1に送信する回転数
+
+// Modbus通信状況追跡
+struct ModbusCommStatus {
+  // エアデータマイコン
+  bool airDataConnected = false;
+  unsigned long airDataLastSuccessTime = 0;
+  uint32_t airDataSuccessCount = 0;
+  uint32_t airDataFailureCount = 0;
+  
+  // Display D-1
+  bool displayD1Connected = false;
+  unsigned long displayD1LastSuccessTime = 0;
+  uint32_t displayD1SuccessCount = 0;
+  uint32_t displayD1FailureCount = 0;
+  
+  // 最後のサマリー表示時刻
+  unsigned long lastSummaryTime = 0;
+  const unsigned long SUMMARY_INTERVAL = 5000;  // 5秒ごと
+} modbusStatus;
+
+// LED制御用
+#define LED_BLINK_SUCCESS 1  // 点滅（成功）
+#define LED_ON_ERROR 2       // 点灯（エラー）
+uint16_t ledControlValue = 0;  // D1に送信するLED制御値
+unsigned long ledLastToggleTime = 0;
+const unsigned long LED_BLINK_INTERVAL = 500;  // 500ms間隔で点滅
+static bool ledBlinkState = false;  // LED点滅の状態
+
+// SD カード関連
+const char* LOG_FILE = "/flight_log.csv";  // ログファイル名
+bool sdCardReady = false;                   // SD カード初期化状態
+
+// 書き込みステータス
+struct WriteStatus {
+  bool lastWriteSuccess = false;
+  unsigned long lastWriteTime = 0;
+  uint32_t successCount = 0;
+  uint32_t failureCount = 0;
+  char statusMessage[32] = "Initializing";
+} writeStatus;
+
+// ===================================================================
+// セットアップ
+// ===================================================================
+void setup() {
+  Serial.begin(115200);
+  delay(100);  // 最小限の待機（デバッグ用）
+  Serial.println("\n--- Logger Start ---");
+
+  // LEDピン初期化
+  Serial.println("[LOGGER] Initializing LED pin...");
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);  // 初期状態はOFF
+  Serial.println("[LOGGER] LED pin initialized");
+
+  // ★重要: XIAO ESP32C3のハードウェアSPIピンを明示的に割り当てる
+  Serial.println("[LOGGER] Initializing SPI...");
+  SPI.begin(8, 9, 10, 5);  // SCK=8, MISO=9, MOSI=10, CS=5
+  Serial.println("[LOGGER] SPI initialized");
+
+  // SD カード初期化
+  initSDCard();
+  
+  // Modbus マスタ初期化
+  master.begin();
+  
+  // Modbus通信状況を初期化（最初のサマリー表示回避）
+  modbusStatus.airDataLastSuccessTime = millis();
+  modbusStatus.displayD1LastSuccessTime = millis();
+  modbusStatus.lastSummaryTime = millis();
+  
+  // IMU初期化（SPI）
+  Serial.println("[LOGGER] Initializing BNO085 IMU...");
+  if (!bno08x.begin_SPI(BNO08X_CS, BNO08X_INT)) {
+    Serial.println("[LOGGER] Failed to initialize BNO085");
+  } else {
+    Serial.println("[LOGGER] BNO085 initialized successfully");
+    // レポート設定
+    if (! bno08x.enableReport(reportType, reportIntervalUs)) {
+      Serial.println("[LOGGER] Could not enable BNO085 report");
+    } else {
+      Serial.println("[LOGGER] BNO085 report enabled");
+    }
+  }
+  
+  // TODO: RTC初期化
+  // TODO: コマンド入力初期化（シリアルモニタなど）
+  
+  Serial.println("[LOGGER] All systems initialized");
+}
+
+// ===================================================================
+// ループ
+// ===================================================================
+void loop() {
+  // Modbusマスタータスク（常に実行必要）
+  master.task();
+
+  // 定期的にデータを読み込み
+  if (millis() - lastReadTime > READ_INTERVAL) {
+    lastReadTime = millis();
+    
+    // エアデータマイコンから読む
+    bool airDataReadSuccess = false;
+    if (master.readRegistersSync(SLAVE_ID_AIR_DATA, AIR_REG_READ, airDataBuf, AIR_REG_READ_SIZE)) {
+      Serial.printf("[LOGGER] Air Data: Rotation=%d, AS5600_1=%d, AS5600_2=%d, Batt=%d\n",
+                    airDataBuf[0], airDataBuf[1], airDataBuf[2], airDataBuf[3]);
+      airDataReadSuccess = true;
+      modbusStatus.airDataConnected = true;
+      modbusStatus.airDataLastSuccessTime = millis();
+      modbusStatus.airDataSuccessCount++;
+      
+      // 回転数を display_d1 に送信
+      rotationCountToSend = airDataBuf[0];
+      if (master.writeRegistersSync(SLAVE_ID_DISPLAY_3_1, DISP_D1_REG_WRITE, &rotationCountToSend, 1)) {
+        Serial.printf("[LOGGER] Sent rotation count to Display D-1: %d\n", rotationCountToSend);
+      } else {
+        Serial.println("[LOGGER] FAILED to send rotation count to Display D-1");
+      }
+    } else {
+      Serial.println("[LOGGER] FAILED to read Air Data");
+      airDataReadSuccess = false;
+      modbusStatus.airDataFailureCount++;
+      modbusStatus.airDataConnected = false;
+      // 失敗時はバッファを0に初期化
+      for (int i = 0; i < AIR_REG_READ_SIZE; i++) {
+        airDataBuf[i] = 0;
+      }
+    }
+    
+    // Display D-1から読む（D-2のセンサーデータはD-1経由で受け取られている）
+    bool displayD1ReadSuccess = false;
+    if (master.readRegistersSync(SLAVE_ID_DISPLAY_3_1, DISP_D1_REG_READ, displayD1Buf, DISP_D1_REG_READ_SIZE)) {
+      // displayD1Bufからセンサーデータをパース
+      uint16_t baroAlt = displayD1Buf[0];
+      potentiometer1 = displayD1Buf[1];
+      potentiometer2 = displayD1Buf[2];
+      
+      Serial.printf("[LOGGER] Display D-1: Baro_Alt=%d, Pot1=%d, Pot2=%d\n",
+                    baroAlt, potentiometer1, potentiometer2);
+      displayD1ReadSuccess = true;
+      modbusStatus.displayD1Connected = true;
+      modbusStatus.displayD1LastSuccessTime = millis();
+      modbusStatus.displayD1SuccessCount++;
+    } else {
+      Serial.println("[LOGGER] FAILED to read Display D-1");
+      displayD1ReadSuccess = false;
+      modbusStatus.displayD1FailureCount++;
+      modbusStatus.displayD1Connected = false;
+      // 失敗時はバッファを0に初期化
+      for (int i = 0; i < DISP_D1_REG_READ_SIZE; i++) {
+        displayD1Buf[i] = 0;
+      }
+      potentiometer1 = 0;
+      potentiometer2 = 0;
+    }
+    
+    // IMUから姿勢角を読む
+    readIMUData();
+    
+    // SDカードに統合ログレコードを記録（成功失敗に関わらず常に記録）
+    if (sdCardReady) {
+      logFlightData(airDataBuf, displayD1Buf);
+    }
+    
+    // 書き込み結果に基づいてLED制御値を設定
+    if (writeStatus.lastWriteSuccess) {
+      ledControlValue = LED_BLINK_SUCCESS;  // 成功時は点滅
+      Serial.println("[LOGGER] LED control: BLINK (Write Success)");
+    } else {
+      ledControlValue = LED_ON_ERROR;       // 失敗時は点灯
+      Serial.println("[LOGGER] LED control: ON (Write Error)");
+    }
+    
+    // Modbus通信状況のサマリー表示
+    printModbusStatus();
+  }
+
+  // ロガー自身のLED制御
+  updateLoggerLED();
+
+  // TODO: シリアルコマンド処理（ボーレート切り替え指令など）
+}
+
+/**
+ * Modbus通信状況をシリアル出力
+ */
+void printModbusStatus() {
+  if (millis() - modbusStatus.lastSummaryTime < modbusStatus.SUMMARY_INTERVAL) {
+    return;
+  }
+  modbusStatus.lastSummaryTime = millis();
+  
+  Serial.println("\n[MODBUS_STATUS]");
+  
+  // エアデータマイコン状況
+  Serial.printf("  Air Data (ID:1): %s | OK:%lu Err:%lu | Last: %lums ago\n",
+                modbusStatus.airDataConnected ? "CONNECTED" : "DISCONNECTED",
+                modbusStatus.airDataSuccessCount,
+                modbusStatus.airDataFailureCount,
+                millis() - modbusStatus.airDataLastSuccessTime);
+  
+  // Display D-1状況
+  Serial.printf("  Display D-1 (ID:2): %s | OK:%lu Err:%lu | Last: %lums ago\n",
+                modbusStatus.displayD1Connected ? "CONNECTED" : "DISCONNECTED",
+                modbusStatus.displayD1SuccessCount,
+                modbusStatus.displayD1FailureCount,
+                millis() - modbusStatus.displayD1LastSuccessTime);
+  
+  // 全体ステータス
+  bool allConnected = modbusStatus.airDataConnected && modbusStatus.displayD1Connected;
+  Serial.printf("  Overall: %s\n\n",
+                allConnected ? "✓ ALL SLAVES CONNECTED" : "✗ SOME SLAVES DISCONNECTED");
+}
+
+/**
+ * クォータニオンからオイラー角を計算
+ */
+void quaternionToEuler(float qr, float qi, float qj, float qk, euler_t* ypr, bool degrees = false) {
+  float sqr = sq(qr);
+  float sqi = sq(qi);
+  float sqj = sq(qj);
+  float sqk = sq(qk);
+
+  ypr->yaw = atan2(2.0 * (qi * qj + qk * qr), (sqi - sqj - sqk + sqr));
+  ypr->pitch = asin(-2.0 * (qi * qk - qj * qr) / (sqi + sqj + sqk + sqr));
+  ypr->roll = atan2(2.0 * (qj * qk + qi * qr), (-sqi - sqj + sqk + sqr));
+
+  if (degrees) {
+    ypr->yaw *= RAD_TO_DEG;
+    ypr->pitch *= RAD_TO_DEG;
+    ypr->roll *= RAD_TO_DEG;
+  }
+}
+
+/**
+ * IMUから姿勢角を読み込む
+ */
+void readIMUData() {
+  if (bno08x.wasReset()) {
+    Serial.println("[LOGGER] IMU was reset");
+    if (! bno08x.enableReport(reportType, reportIntervalUs)) {
+      Serial.println("[LOGGER] Could not re-enable IMU report after reset");
+    }
+  }
+  
+  if (bno08x.getSensorEvent(&sensorValue)) {
+    switch (sensorValue.sensorId) {
+      case SH2_ARVR_STABILIZED_RV:
+        quaternionToEuler(sensorValue.un.arvrStabilizedRV.real, 
+                         sensorValue.un.arvrStabilizedRV.i,
+                         sensorValue.un.arvrStabilizedRV.j,
+                         sensorValue.un.arvrStabilizedRV.k, 
+                         &imuData, true);  // degrees=true
+        break;
+      case SH2_GYRO_INTEGRATED_RV:
+        quaternionToEuler(sensorValue.un.gyroIntegratedRV.real,
+                         sensorValue.un.gyroIntegratedRV.i,
+                         sensorValue.un.gyroIntegratedRV.j,
+                         sensorValue.un.gyroIntegratedRV.k,
+                         &imuData, true);  // degrees=true
+        break;
+      default:
+        return;
+    }
+    
+    Serial.printf("[LOGGER] IMU: Yaw=%.2f, Pitch=%.2f, Roll=%.2f (Status=%d)\n",
+                  imuData.yaw, imuData.pitch, imuData.roll, sensorValue.status);
+  }
+}
+
+/**
+ * ボーレート切り替える例（シリアルコマンドで指令される想定）
+ */
+void changeMasterBaud(int baudIdx) {
+  if (baudIdx < 0 || baudIdx >= NUM_BAUDS) {
+    Serial.printf("Invalid baud index: %d\n", baudIdx);
+    return;
+  }
+  
+  // 最初にエアデータマイコンを切り替え
+  Serial.printf("Changing Air Data baud to index %d...\n", baudIdx);
+  master.requestBaudChange(SLAVE_ID_AIR_DATA, baudIdx);
+  delay(2000);
+  
+  // 次に Display D-1 を切り替え
+  Serial.printf("Changing Display D-1 baud to index %d...\n", baudIdx);
+  master.requestBaudChange(SLAVE_ID_DISPLAY_3_1, baudIdx);
+  delay(2000);
+  
+  Serial.printf("All slaves now at correct baud\n");
+}
+
+// ===================================================================
+// SDカード関連関数
+// ===================================================================
+
+/**
+ * SDカード初期化
+ */
+void initSDCard() {
+  Serial.println("[LOGGER] Initializing SD card...");
+  
+  // ★重要: SDライブラリの初期化時に、割り当てたCSピン(5)を渡す
+  if(!SD.begin(5)){
+    Serial.println("[LOGGER] Card Mount Failed");
+    sdCardReady = false;
+    return;
+  }
+  
+  uint8_t cardType = SD.cardType();
+
+  if(cardType == CARD_NONE){
+    Serial.println("[LOGGER] No SD card attached");
+    sdCardReady = false;
+    return;
+  }
+
+  Serial.print("[LOGGER] SD Card Type: ");
+  if(cardType == CARD_MMC){
+    Serial.println("MMC");
+  } else if(cardType == CARD_SD){
+    Serial.println("SDSC");
+  } else if(cardType == CARD_SDHC){
+    Serial.println("SDHC");
+  } else {
+    Serial.println("UNKNOWN");
+  }
+
+  uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+  Serial.printf("[LOGGER] SD Card Size: %lluMB\n", cardSize);
+  Serial.printf("[LOGGER] Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
+  
+  // ログファイルが存在しない場合はヘッダを書き込み
+  if (!SD.exists(LOG_FILE)) {
+    File file = SD.open(LOG_FILE, FILE_WRITE);
+    if (file) {
+      file.println("Timestamp,Rotation,AS5600_1,AS5600_2,Battery,Baro_Alt,UltrasonicAlt,Roll,Pitch,Yaw,Pot1,Pot2");
+      file.close();
+      Serial.printf("[LOGGER] Created log file: %s\n", LOG_FILE);
+    }
+  }
+  
+  sdCardReady = true;
+  Serial.println("[LOGGER] SD card ready");
+}
+
+/**
+ * フライトデータを統合してSDカードに記録
+ * センサー読み込み失敗時も0を記録
+ */
+void logFlightData(uint16_t* airBuf, uint16_t* displayBuf) {
+  if (!sdCardReady) {
+    writeStatus.lastWriteSuccess = false;
+    writeStatus.failureCount++;
+    snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "SD Not Ready");
+    return;
+  }
+  
+  char logEntry[512];  // バッファサイズを拡大
+  unsigned long ts = millis();
+  
+  // CSV形式: Timestamp,Rotation,AS5600_1,AS5600_2,Battery,Baro_Alt,UltrasonicAlt,Roll,Pitch,Yaw,Pot1,Pot2
+  snprintf(logEntry, sizeof(logEntry), "%lu,%u,%u,%u,%u,%u,0,%.2f,%.2f,%.2f,%u,%u\n",
+          ts, 
+          airBuf[0],      // Rotation
+          airBuf[1],      // AS5600_1
+          airBuf[2],      // AS5600_2
+          airBuf[3],      // Battery
+          displayBuf[0],  // Baro_Alt
+          // 0               // UltrasonicAlt（未実装）
+          imuData.roll,   // Roll
+          imuData.pitch,  // Pitch
+          imuData.yaw,    // Yaw
+          potentiometer1, // Pot1
+          potentiometer2  // Pot2
+         );
+  
+  File file = SD.open(LOG_FILE, FILE_APPEND);
+  if (file) {
+    if (file.print(logEntry)) {
+      writeStatus.lastWriteSuccess = true;
+      writeStatus.successCount++;
+      snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Log: OK");
+      Serial.printf("[LOGGER] Flight log written OK: %s", logEntry);
+    } else {
+      writeStatus.lastWriteSuccess = false;
+      writeStatus.failureCount++;
+      snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Log: Write Err");
+      Serial.println("[LOGGER] Flight log write FAILED");
+    }
+    file.close();
+  } else {
+    writeStatus.lastWriteSuccess = false;
+    writeStatus.failureCount++;
+    snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Log: Open Err");
+    Serial.println("[LOGGER] Failed to open log file");
+  }
+  
+  writeStatus.lastWriteTime = millis();
+}
+
+/**
+ * エアデータをSDカードに記録（非推奨：logFlightData()を使用）
+ */
+void logAirData(uint16_t* buf) {
+  if (!sdCardReady) {
+    writeStatus.lastWriteSuccess = false;
+    writeStatus.failureCount++;
+    snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "SD Not Ready");
+    return;
+  }
+  
+  char logEntry[128];
+  unsigned long ts = millis();
+  
+  sprintf(logEntry, "%lu,%u,%u,%u,%u,",
+          ts, buf[0], buf[1], buf[2], buf[3]);
+  
+  File file = SD.open(LOG_FILE, FILE_APPEND);
+  if (file) {
+    if (file.print(logEntry)) {
+      writeStatus.lastWriteSuccess = true;
+      writeStatus.successCount++;
+      snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Air: OK");
+      Serial.println("[LOGGER] Air data written OK");
+    } else {
+      writeStatus.lastWriteSuccess = false;
+      writeStatus.failureCount++;
+      snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Air: Write Err");
+      Serial.println("[LOGGER] Air data write FAILED");
+    }
+    file.close();
+  } else {
+    writeStatus.lastWriteSuccess = false;
+    writeStatus.failureCount++;
+    snprintf(writeStatus.statusMessage, sizeof(writeStatus.statusMessage), "Air: Open Err");
+    Serial.println("[LOGGER] Failed to open log file");
+  }
+  
+  writeStatus.lastWriteTime = millis();
+}
+
+/**
+ * ロガーのLED制御（GPIO上のLED）
+ * SD書き込み成功時は点滅、失敗時は常時点灯
+ */
+void updateLoggerLED() {
+  if (ledControlValue == LED_BLINK_SUCCESS) {
+    // 成功時：LED点滅（500ms間隔）
+    unsigned long currentTime = millis();
+    if (currentTime - ledLastToggleTime >= LED_BLINK_INTERVAL) {
+      ledLastToggleTime = currentTime;
+      ledBlinkState = !ledBlinkState;  // 状態切り替え
+      digitalWrite(LED_PIN, ledBlinkState ? HIGH : LOW);
+      Serial.printf("[LOGGER] LED BLINK: %s\n", ledBlinkState ? "ON" : "OFF");
+    }
+  } else if (ledControlValue == LED_ON_ERROR) {
+    // エラー時：LED常時点灯
+    digitalWrite(LED_PIN, HIGH);
+  } else {
+    // 初期状態：LED OFF
+    digitalWrite(LED_PIN, LOW);
+  }
+}

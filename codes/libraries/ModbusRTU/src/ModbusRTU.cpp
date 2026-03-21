@@ -68,10 +68,10 @@ uint8_t ModbusRTU::recvData(volatile uint8_t* data, uint8_t length){
 #if !USE_CUSTOM_READ_WRITE_FUNCTIONS
     void ModbusRTU::start(uint16_t address, uint32_t baudRate, HardwareSerial& serialPort, bool initialize){
         this->deviceAddress = address;
-        defaultSerialCtx.serial = &serialPort;
+        defaultSerialCtx.serial = &Serial;
         if (initialize == true){
-            serialPort.begin(baudRate, SERIAL_8E1);
-            serialPort.setTimeout(1);
+            Serial.begin(baudRate, SERIAL_8E1);
+            Serial.setTimeout(1);
         }
         //Calculate timeout based on baud rate in microseconds
         defaultSerialCtx.byteTransTime = ((int)ceil(1000000 / baudRate)) * (1 + 8 + 1 + 1); //1 start bit + 8 data bits + parity + 1 stop bit
