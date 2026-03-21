@@ -40,8 +40,8 @@ const int NUM_BAUDS = 5;
 
 // ========== 表示マイコン D-1用レジスタ（TFT + 大気圧センサ） ==========
 // 読み込み用（Slave用）
-#define DISP_D1_REG_READ       0    // アドレス 0～0：気圧高度
-#define DISP_D1_REG_READ_SIZE  1    // 大気圧センサの高度
+#define DISP_D1_REG_READ       0    // アドレス 0～2：気圧高度、ポテンショ①②
+#define DISP_D1_REG_READ_SIZE  3    // 大気圧高度、ポテンショメータ①②
 
 // 書き込み用（マスター→スレーブへの制御）
 #define DISP_D1_REG_WRITE      10   // アドレス 10：LED制御等

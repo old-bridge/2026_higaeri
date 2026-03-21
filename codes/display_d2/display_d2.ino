@@ -10,6 +10,7 @@
  */
 
 #include <Wire.h>
+#include <Adafruit_DPS310.h>
 
 // ===================================================================
 // ピン定義
@@ -24,20 +25,29 @@
 // I2C 設定
 // ===================================================================
 #define I2C_ADDR_D2  0x30  // このマイコンのI2Cスレーブアドレス
-#define I2C_BUFFER_SIZE 8
+#define I2C_BUFFER_SIZE 12  // 拡張：大気圧データ用に4バイト追加
+
+// DPS310設定
+#define DPS310_I2C_ADDR 0x76  // SDOはGNDに接続
+#define SEALEVELPRESSURE_HPA 1013.25  // 海面基準気圧
 
 // ===================================================================
 // グローバル変数
 // ===================================================================
 
 const int LED_PIN = D10;
+
+// DPS310インスタンス
+Adafruit_DPS310 dps;
+
 // センサー値バッファ
 struct SensorData {
   uint16_t potentiometer1;  // ポテンショメータ①
   uint16_t potentiometer2;  // ポテンショメータ②
   uint16_t batteryVoltage;  // バッテリー電圧
   uint16_t ultrasonicAlt;   // 超音波高度
-} sensorData = {0, 0, 0, 0};
+  uint16_t baroAlt;         // 大気圧高度 (I2C, DPS310)
+} sensorData = {0, 0, 0, 0, 0};
 
 // I2C通信用バッファ
 uint8_t i2cTxBuffer[I2C_BUFFER_SIZE] = {0};
@@ -66,13 +76,17 @@ void onI2CRequest() {
   i2cTxBuffer[5] = (sensorData.batteryVoltage >> 8) & 0xFF;
   i2cTxBuffer[6] = sensorData.ultrasonicAlt & 0xFF;
   i2cTxBuffer[7] = (sensorData.ultrasonicAlt >> 8) & 0xFF;
+  i2cTxBuffer[8] = sensorData.baroAlt & 0xFF;
+  i2cTxBuffer[9] = (sensorData.baroAlt >> 8) & 0xFF;
+  i2cTxBuffer[10] = 0;  // 予備
+  i2cTxBuffer[11] = 0;  // 予備
 
   // バッファを送信
   Wire.write(i2cTxBuffer, I2C_BUFFER_SIZE);
   
-  Serial.printf("[DISPLAY_D2] I2C data sent: Pot1=%d, Pot2=%d, Batt=%d, US_Alt=%d\n",
+  Serial.printf("[DISPLAY_D2] I2C data sent: Pot1=%d, Pot2=%d, Batt=%d, US_Alt=%d, Baro_Alt=%d\n",
                 sensorData.potentiometer1, sensorData.potentiometer2,
-                sensorData.batteryVoltage, sensorData.ultrasonicAlt);
+                sensorData.batteryVoltage, sensorData.ultrasonicAlt, sensorData.baroAlt);
 }
 
 // ===================================================================
@@ -107,16 +121,38 @@ void readUltrasonicAltitude() {
 }
 
 /**
+ * DPS310から大気圧高度を読み込む
+ */
+void readBarometricAltitude() {
+  sensors_event_t temp_event, pressure_event;
+  
+  // データが準備できているか確認
+  if (dps.temperatureAvailable() && dps.pressureAvailable()) {
+    // センサからデータを取得
+    if (dps.getEvents(&temp_event, &pressure_event)) {
+      // 高度を計算して記録（小数点第1位までをuint16_tに変換）
+      float altitude_m = dps.readAltitude(SEALEVELPRESSURE_HPA);
+      sensorData.baroAlt = (uint16_t)(altitude_m * 10);  // cm単位で記録
+    } else {
+      sensorData.baroAlt = 0;
+    }
+  } else {
+    sensorData.baroAlt = 0;
+  }
+}
+
+/**
  * 全センサーを読み込む
  */
 void updateSensors() {
   readPotentiometers();
   readBatteryVoltage();
   readUltrasonicAltitude();
+  readBarometricAltitude();
 
-  Serial.printf("[DISPLAY_D2] Sensors: Pot1=%d, Pot2=%d, Batt=%d, US_Alt=%d\n",
+  Serial.printf("[DISPLAY_D2] Sensors: Pot1=%d, Pot2=%d, Batt=%d, US_Alt=%d, Baro_Alt=%d\n",
                 sensorData.potentiometer1, sensorData.potentiometer2,
-                sensorData.batteryVoltage, sensorData.ultrasonicAlt);
+                sensorData.batteryVoltage, sensorData.ultrasonicAlt, sensorData.baroAlt);
 }
 
 // ===================================================================
@@ -147,6 +183,17 @@ void setup() {
   Wire.begin(I2C_ADDR_D2);
   Wire.onRequest(onI2CRequest);
   Serial.println("[DISPLAY_D2] I2C Slave initialized @ 0x30");
+
+  // DPS310初期化
+  if (!dps.begin_I2C(DPS310_I2C_ADDR, &Wire)) {
+    Serial.println("[DISPLAY_D2] Failed to initialize DPS310");
+  } else {
+    Serial.println("[DISPLAY_D2] DPS310 initialized successfully");
+    // 最高精度で設定
+    dps.configurePressure(DPS310_64HZ, DPS310_64SAMPLES);
+    dps.configureTemperature(DPS310_64HZ, DPS310_64SAMPLES);
+    Serial.println("[DISPLAY_D2] DPS310 Pressure sensor ready");
+  }
 
   Serial.println("[DISPLAY_D2] All systems initialized");
 }
