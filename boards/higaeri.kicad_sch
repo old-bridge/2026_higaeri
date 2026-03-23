@@ -34,6 +34,10 @@
 		(uuid "19d7bb7f-0611-4840-87a4-4ca7ac746170")
 	)
 	(no_connect
+		(at 215.9 55.88)
+		(uuid "236a1fa8-8786-42c7-904d-6c6b807286d4")
+	)
+	(no_connect
 		(at 49.53 179.07)
 		(uuid "259a51e9-0ff9-49a9-b739-53d3e4336b5e")
 	)
@@ -74,12 +78,12 @@
 		(uuid "5408c0b7-7ebf-4f48-93e3-3ac590701bbb")
 	)
 	(no_connect
-		(at 99.06 66.04)
-		(uuid "54c74bb8-13d8-40a7-8dc1-5b9181b71d5a")
+		(at 220.98 30.48)
+		(uuid "54c4b4ea-7010-46b1-bcc0-872d0e278b3d")
 	)
 	(no_connect
-		(at 232.41 81.28)
-		(uuid "5be9feb5-1269-41d6-8bf4-d389b3e73c06")
+		(at 99.06 66.04)
+		(uuid "54c74bb8-13d8-40a7-8dc1-5b9181b71d5a")
 	)
 	(no_connect
 		(at 232.41 63.5)
@@ -94,8 +98,24 @@
 		(uuid "7ec4ee62-20bf-4c9e-a647-6dbec927a35e")
 	)
 	(no_connect
+		(at 215.9 48.26)
+		(uuid "8206c9ae-ddff-4e67-99b2-a4e80b1cc90c")
+	)
+	(no_connect
+		(at 215.9 44.45)
+		(uuid "847d0abe-6103-475a-86e5-cd42b62969d2")
+	)
+	(no_connect
 		(at 57.15 38.1)
 		(uuid "85b256cd-4f3f-42c6-805d-f43418a74284")
+	)
+	(no_connect
+		(at 215.9 36.83)
+		(uuid "8612087e-0dd7-4a13-99e7-1bd51565f3b0")
+	)
+	(no_connect
+		(at 215.9 52.07)
+		(uuid "879b2e4c-5365-4ac5-a8dc-1ff0e29c6b29")
 	)
 	(no_connect
 		(at 232.41 118.11)
@@ -104,6 +124,10 @@
 	(no_connect
 		(at 232.41 53.34)
 		(uuid "9750906b-c673-4e8d-80cb-15bb3896c2d0")
+	)
+	(no_connect
+		(at 232.41 39.37)
+		(uuid "9d316857-b215-4004-8389-598972472c35")
 	)
 	(no_connect
 		(at 232.41 132.08)
@@ -116,6 +140,10 @@
 	(no_connect
 		(at 232.41 48.26)
 		(uuid "b3a8d85f-ab0c-4926-b92e-987497d4d7ee")
+	)
+	(no_connect
+		(at 215.9 40.64)
+		(uuid "bc004a38-a557-4a87-972b-245791af9392")
 	)
 	(no_connect
 		(at 99.06 46.99)
@@ -312,7 +340,7 @@
 			)
 		)
 		(instances
-			(project "26proto"
+			(project "higaeri"
 				(path "/493bec57-bd9f-4f18-b3ef-0d7a091ad475"
 					(page "3")
 				)
@@ -544,9 +572,111 @@
 			)
 		)
 		(instances
-			(project "26proto"
+			(project "higaeri"
 				(path "/493bec57-bd9f-4f18-b3ef-0d7a091ad475"
 					(page "4")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 186.69 33.655)
+		(size 29.21 24.13)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "b02d001d-6319-4ac4-9548-e2ade4fe4496")
+		(property "Sheetname" "RE12A_amplifier"
+			(at 186.69 32.9434 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "RE12A_amplifier.kicad_sch"
+			(at 186.69 58.3696 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(pin "encoder_anode" input
+			(at 215.9 40.64 0)
+			(uuid "2c902475-46e2-406c-a7c0-e486232e3986")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "encoder_cathode" input
+			(at 215.9 44.45 0)
+			(uuid "223d0777-ffb6-4c5f-928a-e02b66c13bd0")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "encoder_collector" input
+			(at 215.9 48.26 0)
+			(uuid "b33c2705-e66b-4506-b36e-57edace3fb8f")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "encoder_emitter" input
+			(at 215.9 52.07 0)
+			(uuid "373929d9-fb64-4bdb-aa3d-9c39f1cd4d56")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "encoder_out" input
+			(at 215.9 36.83 0)
+			(uuid "566f21b0-cd11-46f5-9271-857cd44cb21c")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(pin "input" input
+			(at 215.9 55.88 0)
+			(uuid "f93b60b3-a091-4f2d-9860-4db18736ab86")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(instances
+			(project "higaeri"
+				(path "/493bec57-bd9f-4f18-b3ef-0d7a091ad475"
+					(page "5")
 				)
 			)
 		)
@@ -645,16 +775,6 @@
 				(justify left)
 			)
 		)
-		(pin "encoder_raw" input
-			(at 232.41 81.28 180)
-			(uuid "1ad9bac5-073c-46c3-bfb3-178c3c2104a3")
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
 		(pin "RS485_A" input
 			(at 232.41 71.12 180)
 			(uuid "09164fcc-5710-43f3-9a0c-864b1c023f7f")
@@ -725,8 +845,18 @@
 				(justify left)
 			)
 		)
+		(pin "input" input
+			(at 232.41 39.37 180)
+			(uuid "a9649375-9689-497c-9abe-b48c051c19d4")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
 		(instances
-			(project "26proto"
+			(project "higaeri"
 				(path "/493bec57-bd9f-4f18-b3ef-0d7a091ad475"
 					(page "2")
 				)
