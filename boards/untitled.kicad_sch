@@ -4165,7 +4165,7 @@
 				)
 			)
 		)
-		(property "Value" "LM397"
+		(property "Value" "TJ393"
 			(at 189.992 135.89 0)
 			(effects
 				(font
@@ -4975,7 +4975,7 @@
 				)
 			)
 		)
-		(property "Value" "330"
+		(property "Value" "150"
 			(at 54.102 113.284 90)
 			(effects
 				(font

@@ -7809,7 +7809,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "Conn_01x03 servo"
+		(property "Value" "servo"
 			(at 148.59 95.2499 0)
 			(effects
 				(font
@@ -9315,7 +9315,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "Conn_01x03 encoder_direct"
+		(property "Value" "encoder_direct"
 			(at 148.59 105.4099 0)
 			(effects
 				(font
