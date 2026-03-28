@@ -2604,10 +2604,22 @@
 		(uuid "bd09c090-a2f0-46fb-a00c-7e1a8ec46d49")
 	)
 	(junction
+		(at 100.33 142.24)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "d04ef672-74f5-4cd3-a782-44ac6ff9054f")
+	)
+	(junction
 		(at 185.42 106.68)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "dba09bad-71a0-40e9-a557-2e3c03c96d49")
+	)
+	(junction
+		(at 107.95 139.7)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "e46aa4d2-18d4-4d45-9704-1fc9094b1624")
 	)
 	(junction
 		(at 170.18 111.76)
@@ -2689,6 +2701,26 @@
 	)
 	(wire
 		(pts
+			(xy 100.33 137.16) (xy 100.33 142.24)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "205f839f-8a29-460e-8fbf-59404c96db04")
+	)
+	(wire
+		(pts
+			(xy 107.95 137.16) (xy 107.95 139.7)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "22af995f-f806-4aac-8438-35155ce185aa")
+	)
+	(wire
+		(pts
 			(xy 99.06 144.78) (xy 110.49 144.78)
 		)
 		(stroke
@@ -2739,7 +2771,7 @@
 	)
 	(wire
 		(pts
-			(xy 105.41 139.7) (xy 110.49 139.7)
+			(xy 105.41 139.7) (xy 107.95 139.7)
 		)
 		(stroke
 			(width 0)
@@ -2809,6 +2841,16 @@
 	)
 	(wire
 		(pts
+			(xy 107.95 139.7) (xy 110.49 139.7)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "900d20e3-36ab-49b2-b8a6-3ded9af0d198")
+	)
+	(wire
+		(pts
 			(xy 128.27 121.92) (xy 129.54 121.92)
 		)
 		(stroke
@@ -2836,6 +2878,16 @@
 			(type default)
 		)
 		(uuid "96aa0fa1-27dd-4652-bbef-cf36f34c2758")
+	)
+	(wire
+		(pts
+			(xy 100.33 142.24) (xy 110.49 142.24)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9a5e350f-c206-4f5d-9102-7d515c8a375d")
 	)
 	(wire
 		(pts
@@ -3019,7 +3071,7 @@
 	)
 	(wire
 		(pts
-			(xy 99.06 142.24) (xy 110.49 142.24)
+			(xy 99.06 142.24) (xy 100.33 142.24)
 		)
 		(stroke
 			(width 0)
@@ -3354,6 +3406,73 @@
 			(justify right)
 		)
 		(uuid "f86b1751-c57c-4618-87c4-32d0c08a59c4")
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100.33 133.35 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "0216549a-8fa4-4c95-a5a5-8289bba21b3e")
+		(property "Reference" "R25"
+			(at 102.87 133.35 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "2k"
+			(at 101.6 130.302 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric_Pad0.98x0.95mm_HandSolder"
+			(at 98.552 133.35 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 100.33 133.35 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 100.33 133.35 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "0fddd62a-9891-40c1-9007-79c26c5b8723")
+		)
+		(pin "2"
+			(uuid "57d29c2f-6ec5-4c9a-9fa2-4c60a0816164")
+		)
+		(instances
+			(project "higaeri"
+				(path "/493bec57-bd9f-4f18-b3ef-0d7a091ad475/b180609e-b288-4aa4-9dbc-4457c1dfdefc"
+					(reference "R25")
+					(unit 1)
+				)
+			)
+		)
 	)
 	(symbol
 		(lib_id "power:+3.3V")
@@ -3942,7 +4061,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "2bbf069c-de5f-45c2-83c0-93b0d2dee8b0")
-		(property "Reference" "AS5602"
+		(property "Reference" "AS5600-1"
 			(at 121.92 142.2399 90)
 			(effects
 				(font
@@ -4008,7 +4127,7 @@
 		(instances
 			(project "26proto"
 				(path "/493bec57-bd9f-4f18-b3ef-0d7a091ad475/b180609e-b288-4aa4-9dbc-4457c1dfdefc"
-					(reference "AS5602")
+					(reference "AS5600-1")
 					(unit 1)
 				)
 			)
@@ -4960,6 +5079,73 @@
 	)
 	(symbol
 		(lib_id "Device:R")
+		(at 107.95 133.35 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "69a0de8c-6dfb-46eb-bb3e-29019c916b55")
+		(property "Reference" "R27"
+			(at 110.49 133.35 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "2k"
+			(at 109.22 130.302 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric_Pad0.98x0.95mm_HandSolder"
+			(at 106.172 133.35 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 107.95 133.35 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 107.95 133.35 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "5d37378f-c4f3-4389-a77b-e42fc6a10037")
+		)
+		(pin "2"
+			(uuid "c917cfc0-3fac-40c6-884b-e2b42858a10e")
+		)
+		(instances
+			(project "higaeri"
+				(path "/493bec57-bd9f-4f18-b3ef-0d7a091ad475/b180609e-b288-4aa4-9dbc-4457c1dfdefc"
+					(reference "R27")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
 		(at 49.53 113.03 90)
 		(unit 1)
 		(exclude_from_sim no)
@@ -5154,6 +5340,73 @@
 			(project "26proto"
 				(path "/493bec57-bd9f-4f18-b3ef-0d7a091ad475/b180609e-b288-4aa4-9dbc-4457c1dfdefc"
 					(reference "#PWR098")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+3.3V")
+		(at 107.95 129.54 0)
+		(mirror y)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "79325ab1-fd68-4591-8f39-db1123f34cff")
+		(property "Reference" "#PWR0129"
+			(at 107.95 133.35 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+3.3V-1"
+			(at 107.9499 125.73 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 107.95 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 107.95 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+3.3V\""
+			(at 107.95 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "30e1384e-6a61-4de7-99f4-e50f134094ab")
+		)
+		(instances
+			(project "higaeri"
+				(path "/493bec57-bd9f-4f18-b3ef-0d7a091ad475/b180609e-b288-4aa4-9dbc-4457c1dfdefc"
+					(reference "#PWR0129")
 					(unit 1)
 				)
 			)
@@ -5968,6 +6221,73 @@
 		)
 	)
 	(symbol
+		(lib_id "power:+3.3V")
+		(at 100.33 129.54 0)
+		(mirror y)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "af25455e-9672-4843-8c48-9ae35db9e9c4")
+		(property "Reference" "#PWR0111"
+			(at 100.33 133.35 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+3.3V-1"
+			(at 100.3299 125.73 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 100.33 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 100.33 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+3.3V\""
+			(at 100.33 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "bfd85eb4-4d4e-4470-920c-aa5af9ab35fe")
+		)
+		(instances
+			(project "higaeri"
+				(path "/493bec57-bd9f-4f18-b3ef-0d7a091ad475/b180609e-b288-4aa4-9dbc-4457c1dfdefc"
+					(reference "#PWR0111")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:+BATT")
 		(at 66.04 143.51 90)
 		(mirror x)
@@ -6111,7 +6431,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "b79c67af-8050-41d7-a486-c416fdbd750d")
-		(property "Reference" "AS5603"
+		(property "Reference" "AS5600-2"
 			(at 121.92 165.0999 90)
 			(effects
 				(font
@@ -6177,7 +6497,7 @@
 		(instances
 			(project "26proto"
 				(path "/493bec57-bd9f-4f18-b3ef-0d7a091ad475/b180609e-b288-4aa4-9dbc-4457c1dfdefc"
-					(reference "AS5603")
+					(reference "AS5600-2")
 					(unit 1)
 				)
 			)

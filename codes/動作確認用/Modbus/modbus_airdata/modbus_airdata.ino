@@ -1,94 +1,121 @@
-// air_data.ino - SLAVE (Modbus RTU Slave, ID = 1)
-// XIAO ESP32C3
-//
-// DE/RE wiring: both DE and /RE of MAX3485 are tied to DE_PIN (same GPIO).
-//   GPIO=HIGH → TX mode (driver on, receiver off)
-//   GPIO=LOW  → RX mode (driver off, receiver on)
-//
-// DE control is handled INSIDE the library (modified defaultSerialWriteFunction):
-//   before serial->write()  : DE = HIGH
-//   after  serial->flush()  : DE = LOW
-// Just call setDEPin(DE_PIN) once. No callbacks needed.
-
-#include <HardwareSerial.h>
 #include <ModbusRTU.h>
 
-#define BAUDRATE     9600UL
-#define DE_PIN       10      // GPIO10 = D10  (was incorrectly 0)
-#define SLAVE_ID     1
-#define REGN_SENSOR  0       // Holding registers 0-3: rot, as1, as2, batt
-#define LED_PIN D0
+const int DATASIZE = 10;
+#define SLAVE_ID 1
+#define REG_READ      0
+#define REG_WRITE    10
+#define REG_BAUD_CTRL 300
+#define DE_PIN D10 // DE pin for RS485. slave=airdataにあわせた。
 
-
-// UART0 on XIAO ESP32C3: TX=GPIO21(D6), RX=GPIO20(D7)
+ModbusRTU mb;
 HardwareSerial MySerial0(0);
-ModbusRTUServer mb;
 
-uint32_t loopCount = 0;
+const long BAUDRATES[] = {9600, 38400, 115200, 921600, 5000000};
+const int NUM_BAUDS = 5;
+int currentBaudIdx = 0;
 
+// ===================================================================
+// CALLBACKS — TRegister* REQUIRED
+// ===================================================================
+
+uint16_t cbRead(TRegister* reg, uint16_t oldValue) {
+  uint16_t offset = reg->address.address;
+  Serial.printf("[READ]  Offset:%d  Value:%d @ %ld baud\n",
+                offset, oldValue, BAUDRATES[currentBaudIdx]);
+  return oldValue;
+}
+
+uint16_t cbWriteBaud(TRegister* reg, uint16_t newValue) {
+  uint16_t offset = reg->address.address;
+
+  Serial.printf("[WRITE BAUD] Offset:%d  Value:%d @ %ld baud\n",
+                offset, newValue, BAUDRATES[currentBaudIdx]);
+
+  if (offset == REG_BAUD_CTRL && newValue < NUM_BAUDS && newValue != currentBaudIdx) {
+    Serial.printf("[BAUD] Switching to index %d (%ld baud)\n", newValue, BAUDRATES[newValue]);
+    switchToBaud(newValue);
+    mb.Hreg(REG_BAUD_CTRL, 999);  // Ack
+  }
+
+  return newValue;
+}
+
+uint16_t cbWrite(TRegister* reg, uint16_t newValue) {
+  uint16_t offset = reg->address.address;
+
+  if(offset == REG_WRITE){
+    Serial.printf("[WRITE] Offset:%d  Value:%d @ %ld baud\n",
+                  offset, newValue, BAUDRATES[currentBaudIdx]);
+      uint16_t readOffset = offset - REG_WRITE + REG_READ;
+      if (readOffset < REG_READ + DATASIZE) {
+        mb.Hreg(readOffset, newValue + 1);
+        Serial.printf("[ECHO] Wrote %d to offset %d → READ offset %d = %d\n",
+                      newValue, offset, readOffset, newValue + 1);
+      }
+  }
+  else if (offset == REG_WRITE + DATASIZE -1) {
+    Serial.printf("[WRITE] Offset:%d  Value:%d @ %ld baud\n",
+                  offset, newValue, BAUDRATES[currentBaudIdx]);
+  }
+
+  return newValue;
+}
+
+// ===================================================================
+// Safe baud switch
+// ===================================================================
+void switchToBaud(int idx) {
+  long baud = BAUDRATES[idx];
+  Serial.printf("\n[SWITCHING] to %ld baud...\n", baud);
+  Serial.flush();
+
+  MySerial0.flush();
+  MySerial0.end();
+  delay(200);  // Increased for stability
+  MySerial0.begin(baud, SERIAL_8N1, -1, -1);
+  delay(200);
+
+  // Reset RS485 transceiver
+  digitalWrite(DE_PIN, HIGH);
+  delay(5);
+  digitalWrite(DE_PIN, LOW);
+
+  currentBaudIdx = idx;
+  Serial.printf("[READY] Now at %ld baud\n\n", baud);
+}
+
+// ===================================================================
 void setup() {
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH);  // LED ON to indicate setup start
   Serial.begin(115200);
-  delay(300);
-  Serial.println();
-  Serial.println("[AIR_DATA SLAVE] Starting...");
+  while (!Serial);
+  delay(1000);
+  Serial.println(F("\n=== MODBUS RTU SLAVE - CORRECTED (NO lastCount) ==="));
 
-  // Initialize UART0 with Modbus RTU standard format (8E1)
-  MySerial0.begin(BAUDRATE, SERIAL_8E1, -1, -1);
-
-  // Initialize DE pin in receive mode (default)
   pinMode(DE_PIN, OUTPUT);
   digitalWrite(DE_PIN, LOW);
 
-  // Initialize Modbus server (slave).
-  // initialize=false because we already called MySerial0.begin().
-  mb.startModbusServer(SLAVE_ID, BAUDRATE, MySerial0, false);
+  MySerial0.begin(9600, SERIAL_8N1, -1, -1);
+  mb.begin(&MySerial0, DE_PIN);
+  mb.slave(SLAVE_ID);
 
-  // Tell the library which GPIO to use for DE/RE.
-  // defaultSerialWriteFunction will raise DE before write, flush, then drop DE.
-  mb.setDEPin(DE_PIN);
+  mb.addHreg(REG_READ,      100, DATASIZE);
+  mb.addHreg(REG_WRITE,     0,   DATASIZE);
+  mb.addHreg(REG_BAUD_CTRL, 0);
 
-  // Pre-fill holding registers with initial values
-  for (uint16_t i = 0; i < 4; i++) mb.setHoldingValue(REGN_SENSOR + i, 0);
+  // Correct: numregs = how many this callback handles
+  mb.onGetHreg(REG_READ,      cbRead,      1);        // Only 1, or DATASIZE if you want multi-read
+  mb.onSetHreg(REG_WRITE,     cbWrite,     DATASIZE); // Handles up to 100
+  mb.onSetHreg(REG_BAUD_CTRL, cbWriteBaud, 1);
 
-  Serial.printf("[AIR_DATA SLAVE] id=%u  baud=%lu  de=GPIO%d\n", SLAVE_ID, BAUDRATE, DE_PIN);
+  currentBaudIdx = 0;
+  Serial.println(F("[READY] 9600 baud"));
 }
 
 void loop() {
-  // Update simulated sensor data in holding registers
-  mb.setHoldingValue(REGN_SENSOR + 0, (uint16_t)(millis() / 100) % 360);
-  mb.setHoldingValue(REGN_SENSOR + 1, (uint16_t)(millis() / 50)  % 4096);
-  mb.setHoldingValue(REGN_SENSOR + 2, (uint16_t)(millis() / 75)  % 4096);
-  mb.setHoldingValue(REGN_SENSOR + 3, 3300 + (uint16_t)((millis() / 10) % 200));
-
-  // ---- DIAGNOSTIC BLOCK ----
-  // Check if request bytes are arriving in UART RX buffer
-  int rxAvail = MySerial0.available();
-  if (rxAvail > 0) {
-    Serial.printf("[DIAG] RX bytes in buffer: %d  (expected 8 for Modbus request)\n", rxAvail);
-  }
-  // --------------------------
-
-  // DE_PIN sanity check: confirm the pin is actually responding.
-  // Every ~1s, briefly toggle DE_PIN and print the readback value.
-  static unsigned long lastDeCheckMs = 0;
-  if (millis() - lastDeCheckMs >= 1000) {
-    lastDeCheckMs = millis();
-    digitalWrite(DE_PIN, HIGH);
-    delayMicroseconds(10);
-    int deHigh = digitalRead(DE_PIN);
-    digitalWrite(DE_PIN, LOW);
-    delayMicroseconds(10);
-    int deLow = digitalRead(DE_PIN);
-    Serial.printf("[DIAG] DE_PIN=GPIO%d  readback: HIGH=%d LOW=%d  (expected 1 and 0)\n",
-      DE_PIN, deHigh, deLow);
-  }
-
-  mb.communicationLoop();
-
-  if (++loopCount % 50000 == 0) {
-    Serial.printf("[AIR_DATA SLAVE] alive  loop=%lu  reg0=%u\n",
-      (unsigned long)loopCount, mb.getHoldingValue(REGN_SENSOR + 0));
+  unsigned long t1 = micros();
+  mb.task();
+  unsigned long taskTime = micros() - t1;
+  if (taskTime > 1000) {
+    Serial.printf("SLAVE task() = %lu us @ %ld bps\n", taskTime, BAUDRATES[currentBaudIdx]);
   }
 }

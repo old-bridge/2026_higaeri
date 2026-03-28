@@ -1,98 +1,68 @@
 #include "ModbusSlave.h"
 
-/**
- * ModbusSlaveBase::begin()
- * 初期化
- */
+ModbusSlaveBase* ModbusSlaveBase::activeInstance_ = nullptr;
+
+ModbusSlaveBase::ModbusSlaveBase(HardwareSerial& serial, uint8_t slaveId, uint8_t dePin)
+  : serial_(&serial), slaveId_(slaveId), dePin_(dePin) {}
+
 void ModbusSlaveBase::begin() {
-  Serial.begin(115200);
-  while (!Serial);
-  delay(1000);
+  pinMode(dePin_, OUTPUT);
+  digitalWrite(dePin_, LOW);
 
-  pinMode(dePin, OUTPUT);
-  digitalWrite(dePin, LOW);
+  serial_->begin(kModbusBaudRate, SERIAL_8N1, kModbusRxPin, kModbusTxPin);
+  modbus_.begin(serial_, dePin_);
+  modbus_.slave(slaveId_);
 
-  // 9600 bauで開始
-  serial->begin(9600, SERIAL_8N1, -1, -1);
-  mb.begin(serial, dePin);
-  mb.slave(slaveId);
-
-  // 各スレーブ固有の初期化
+  activeInstance_ = this;
   setupRegisters();
   setupCallbacks();
-
-  Serial.printf("[SLAVE %d] READY @ 9600 baud\n", slaveId);
 }
 
-/**
- * ModbusSlaveBase::task()
- * Modbusタスク実行
- */
 void ModbusSlaveBase::task() {
-  mb.task();
+  modbus_.task();
 }
 
-/**
- * ModbusSlaveBase::changeBaud()
- * ボーレート切り替え
- */
-void ModbusSlaveBase::changeBaud(int baudIdx) {
-  if (baudIdx < 0 || baudIdx >= NUM_BAUDS) {
-    Serial.printf("[SLAVE %d] Invalid baud index: %d\n", slaveId, baudIdx);
-    return;
+void ModbusSlaveBase::setupCallbacks() {
+}
+
+uint16_t ModbusSlaveBase::onReadRegister(TRegister*, uint16_t currentValue) {
+  return currentValue;
+}
+
+uint16_t ModbusSlaveBase::onWriteRegister(TRegister*, uint16_t newValue) {
+  return newValue;
+}
+
+void ModbusSlaveBase::addHoldingRegisters(uint16_t startAddress, uint16_t count, uint16_t initialValue) {
+  modbus_.addHreg(startAddress, initialValue, count);
+}
+
+void ModbusSlaveBase::registerReadHandler(uint16_t startAddress, uint16_t count) {
+  modbus_.onGetHreg(startAddress, handleReadThunk, count);
+}
+
+void ModbusSlaveBase::registerWriteHandler(uint16_t startAddress, uint16_t count) {
+  modbus_.onSetHreg(startAddress, handleWriteThunk, count);
+}
+
+void ModbusSlaveBase::setHoldingValue(uint16_t address, uint16_t value) {
+  modbus_.Hreg(address, value);
+}
+
+uint16_t ModbusSlaveBase::getHoldingValue(uint16_t address) const {
+  return const_cast<ModbusRTU&>(modbus_).Hreg(address);
+}
+
+uint16_t ModbusSlaveBase::handleReadThunk(TRegister* reg, uint16_t currentValue) {
+  if (activeInstance_ == nullptr) {
+    return currentValue;
   }
+  return activeInstance_->onReadRegister(reg, currentValue);
+}
 
-  if (baudIdx == currentBaudIdx) {
-    return;  // 同じボーレート指定は無視
+uint16_t ModbusSlaveBase::handleWriteThunk(TRegister* reg, uint16_t newValue) {
+  if (activeInstance_ == nullptr) {
+    return newValue;
   }
-
-  long newBaud = BAUDRATES[baudIdx];
-  Serial.printf("[SLAVE %d] Switching to %ld baud...\n", slaveId, newBaud);
-  Serial.flush();
-
-  serial->flush();
-  serial->end();
-  delay(200);
-  serial->begin(newBaud, SERIAL_8N1, 5, 4);  // RX: D7(GPIO5), TX: D6(GPIO4)
-  delay(200);
-
-  // トランシーバーリセット
-  digitalWrite(dePin, HIGH);
-  delay(5);
-  digitalWrite(dePin, LOW);
-
-  currentBaudIdx = baudIdx;
-  Serial.printf("[SLAVE %d] Now at %ld baud\n\n", slaveId, newBaud);
-}
-
-/**
- * ModbusSlaveBase::getCurrentBaud()
- * 現在のボーレート取得
- */
-long ModbusSlaveBase::getCurrentBaud() const {
-  return BAUDRATES[currentBaudIdx];
-}
-
-/**
- * ModbusSlaveBase::getCurrentBaudIdx()
- * 現在のボーレートインデックス取得
- */
-int ModbusSlaveBase::getCurrentBaudIdx() const {
-  return currentBaudIdx;
-}
-
-/**
- * ModbusSlaveBase::setRegisterValue()
- * レジスタに値を書き込む
- */
-void ModbusSlaveBase::setRegisterValue(uint16_t address, uint16_t value) {
-  mb.Hreg(address, value);
-}
-
-/**
- * ModbusSlaveBase::getRegisterValue()
- * レジスタの値を読み込む
- */
-uint16_t ModbusSlaveBase::getRegisterValue(uint16_t address) const {
-  return mb.Hreg(address);
+  return activeInstance_->onWriteRegister(reg, newValue);
 }

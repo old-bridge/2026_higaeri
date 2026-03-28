@@ -26,11 +26,11 @@
 **Solution**: 
 - Added `#ifndef MODBUS_RTU_H` / `#define MODBUS_RTU_H` guards at the top of `libraries/ModbusRTU/src/ModbusRTU.h`
 - Added closing `#endif` at the end
-- Created `ModbusRTU_wrapper.h` in each subfolder for better include management
+- Direct include of `ModbusRTU.h` is now used because the current library header already has `#pragma once`
 
 **Files modified**:
 - `libraries/ModbusRTU/src/ModbusRTU.h` - Added header guards
-- Created `ModbusRTU_wrapper.h` in each subfolder (air_data, display, logger, master, slave)
+- Removed local `ModbusRTU_wrapper.h`; local modules include `ModbusRTU.h` directly
 
 ### 3. **Include Structure Issues**
 **Problem**: 
@@ -55,7 +55,7 @@
 
 ### 5. **Updated Header Files**
 **Changes**:
-- ModbusSlave.h and ModbusMaster.h now include via `ModbusRTU_wrapper.h` instead of directly including `<ModbusRTU.h>`
+- ModbusSlave.h and ModbusMaster.h now include `<ModbusRTU.h>` directly
 - Files updated in: air_data/, display/
 
 ## Remaining Issues

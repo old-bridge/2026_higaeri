@@ -1,67 +1,41 @@
 #ifndef MODBUS_SLAVE_H
 #define MODBUS_SLAVE_H
 
+#include <Arduino.h>
 #include <ModbusRTU.h>
 #include "ModbusConfig.h"
 
-/**
- * ModbusSlaveBase
- * スレーブマイコン用の基本クラス
- * 各スレーブはこのクラスを継承して具体的な処理を実装
- */
 class ModbusSlaveBase {
-protected:
-  ModbusRTU mb;
-  HardwareSerial* serial;
-  uint8_t slaveId;
-  uint8_t dePin;
-  int currentBaudIdx;
-
-  // 各スレーブが実装すべき仮想メソッド
-  virtual void setupRegisters() = 0;
-  virtual void setupCallbacks() = 0;
-
 public:
-  ModbusSlaveBase(HardwareSerial* hwSerial, uint8_t id, uint8_t de)
-    : serial(hwSerial), slaveId(id), dePin(de), currentBaudIdx(0) {}
+  ModbusSlaveBase(HardwareSerial& serial, uint8_t slaveId, uint8_t dePin);
+  virtual ~ModbusSlaveBase() = default;
 
-  /**
-   * 初期化
-   * setup()内から呼び出すこと
-   */
   void begin();
-
-  /**
-   * Modbusタスク実行
-   * loop()内から毎フレーム呼び出すこと
-   */
   void task();
 
-  /**
-   * ボーレート切り替え
-   * REG_BAUD_CTRLへの書き込みコールバックから呼ばれる
-   */
-  void changeBaud(int baudIdx);
+protected:
+  virtual void setupRegisters() = 0;
+  virtual void setupCallbacks();
+  virtual uint16_t onReadRegister(TRegister* reg, uint16_t currentValue);
+  virtual uint16_t onWriteRegister(TRegister* reg, uint16_t newValue);
 
-  /**
-   * 現在のボーレート取得
-   */
-  long getCurrentBaud() const;
+  void addHoldingRegisters(uint16_t startAddress, uint16_t count, uint16_t initialValue = 0);
+  void registerReadHandler(uint16_t startAddress, uint16_t count = 1);
+  void registerWriteHandler(uint16_t startAddress, uint16_t count = 1);
+  void setHoldingValue(uint16_t address, uint16_t value);
+  uint16_t getHoldingValue(uint16_t address) const;
 
-  /**
-   * 現在のボーレートインデックス取得
-   */
-  int getCurrentBaudIdx() const;
+  ModbusRTU modbus_;
 
-  /**
-   * レジスタに値を書き込む
-   */
-  void setRegisterValue(uint16_t address, uint16_t value);
+private:
+  static uint16_t handleReadThunk(TRegister* reg, uint16_t currentValue);
+  static uint16_t handleWriteThunk(TRegister* reg, uint16_t newValue);
 
-  /**
-   * レジスタの値を読み込む
-   */
-  uint16_t getRegisterValue(uint16_t address) const;
+  HardwareSerial* serial_;
+  uint8_t slaveId_;
+  uint8_t dePin_;
+
+  static ModbusSlaveBase* activeInstance_;
 };
 
-#endif  // MODBUS_SLAVE_H
+#endif

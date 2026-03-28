@@ -2024,6 +2024,12 @@
 		)
 	)
 	(junction
+		(at 217.17 132.08)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "b69377cc-33d1-4d1b-9e79-400804a087f8")
+	)
+	(junction
 		(at 204.47 137.16)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -2034,12 +2040,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "ef39222a-20de-46a1-972e-13cd13f1fbec")
-	)
-	(junction
-		(at 219.71 132.08)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "f534658c-c97d-4a42-983f-073d0ef4fdf1")
 	)
 	(no_connect
 		(at 138.43 39.37)
@@ -2107,16 +2107,6 @@
 	)
 	(wire
 		(pts
-			(xy 224.79 132.08) (xy 219.71 132.08)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "61eb98c7-bf53-4889-8dce-e2b174d11af3")
-	)
-	(wire
-		(pts
 			(xy 190.5 109.22) (xy 198.12 109.22)
 		)
 		(stroke
@@ -2124,6 +2114,36 @@
 			(type default)
 		)
 		(uuid "6ebb9e0b-c265-4172-b86b-e91bc5dc6ec4")
+	)
+	(wire
+		(pts
+			(xy 217.17 142.24) (xy 219.71 142.24)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "89e71879-2cc6-4c53-9db3-3277fc2f34cf")
+	)
+	(wire
+		(pts
+			(xy 217.17 132.08) (xy 224.79 132.08)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9109f8be-ef0c-44c6-8655-00ba2566bb18")
+	)
+	(wire
+		(pts
+			(xy 204.47 137.16) (xy 209.55 137.16)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "afe90dfe-4691-41e1-b049-d5371a79f768")
 	)
 	(wire
 		(pts
@@ -2137,13 +2157,13 @@
 	)
 	(wire
 		(pts
-			(xy 204.47 137.16) (xy 212.09 137.16)
+			(xy 217.17 124.46) (xy 219.71 124.46)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "c5346c49-8843-4081-98c8-f119b2c734eb")
+		(uuid "ce7067f7-9745-4007-af4d-5cdef012b81e")
 	)
 	(hierarchical_label "encoder_anode"
 		(shape input)
@@ -3019,7 +3039,7 @@
 	)
 	(symbol
 		(lib_id "Transistor_BJT:MMBT2222A")
-		(at 217.17 137.16 0)
+		(at 214.63 137.16 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -3028,7 +3048,7 @@
 		(fields_autoplaced yes)
 		(uuid "4c3dd01c-b0ff-4144-99cf-33d01933f6ee")
 		(property "Reference" "Q1"
-			(at 222.25 135.8899 0)
+			(at 219.71 135.8899 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3037,7 +3057,7 @@
 			)
 		)
 		(property "Value" "NPN"
-			(at 222.25 138.4299 0)
+			(at 219.71 138.4299 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3046,7 +3066,7 @@
 			)
 		)
 		(property "Footprint" "Package_TO_SOT_SMD:SOT-23"
-			(at 222.25 139.065 0)
+			(at 219.71 139.065 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3057,7 +3077,7 @@
 			)
 		)
 		(property "Datasheet" "https://assets.nexperia.com/documents/data-sheet/MMBT2222A.pdf"
-			(at 217.17 137.16 0)
+			(at 214.63 137.16 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3067,7 +3087,7 @@
 			)
 		)
 		(property "Description" "600mA Ic, 40V Vce, NPN Transistor, SOT-23"
-			(at 217.17 137.16 0)
+			(at 214.63 137.16 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3076,7 +3096,7 @@
 			)
 		)
 		(property "Sim.Device" "NPN"
-			(at 217.17 137.16 0)
+			(at 214.63 137.16 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3085,7 +3105,7 @@
 			)
 		)
 		(property "Sim.Type" "GUMMELPOON"
-			(at 217.17 137.16 0)
+			(at 214.63 137.16 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3094,7 +3114,7 @@
 			)
 		)
 		(property "Sim.Pins" "1=C 2=B 3=E"
-			(at 217.17 137.16 0)
+			(at 214.63 137.16 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4424,7 +4444,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 219.71 128.27 0)
+		(at 217.17 128.27 0)
 		(mirror y)
 		(unit 1)
 		(exclude_from_sim no)
@@ -4433,7 +4453,7 @@
 		(dnp no)
 		(uuid "e152b04c-68d9-498c-9d25-ef67b618bc0a")
 		(property "Reference" "R16"
-			(at 219.71 128.27 90)
+			(at 216.916 128.524 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4441,7 +4461,7 @@
 			)
 		)
 		(property "Value" "2k2"
-			(at 221.742 128.27 90)
+			(at 219.202 128.27 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4449,7 +4469,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric_Pad0.98x0.95mm_HandSolder"
-			(at 221.488 128.27 90)
+			(at 218.948 128.27 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4458,7 +4478,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 219.71 128.27 0)
+			(at 217.17 128.27 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4467,7 +4487,7 @@
 			)
 		)
 		(property "Description" "Resistor"
-			(at 219.71 128.27 0)
+			(at 217.17 128.27 0)
 			(effects
 				(font
 					(size 1.27 1.27)
