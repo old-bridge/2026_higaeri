@@ -18,11 +18,15 @@ struct DisplayD2Payload {
   uint16_t baroAlt;
 };
 
+
+constexpr uint32_t kDebugPrintIntervalMs = 1000;
+
 namespace {
 Adafruit_DPS310 g_dps;
 bool g_dpsReady = false;
 DisplayD2Payload g_payload = {0, 0, 0, 0, 0};
 unsigned long g_lastUpdateAt = 0;
+unsigned long g_lastDebugAt = 0;
 
 void writePayload() {
   uint8_t buffer[kDisplayD2PayloadSize] = {0};
@@ -68,6 +72,20 @@ void updateSensors() {
   g_payload.ultrasonicAlt = 0;
   updateBarometricAltitude();
 }
+
+void printDebug() {
+  if (millis() - g_lastDebugAt < kDebugPrintIntervalMs) {
+    return;
+  }
+  g_lastDebugAt = millis();
+  Serial.printf("[display_d2] pot1=%u  pot2=%u  batt=%u  ultra=%u  baro=%u  dps=%s\n",
+    g_payload.potentiometer1,
+    g_payload.potentiometer2,
+    g_payload.batteryVoltage,
+    g_payload.ultrasonicAlt,
+    g_payload.baroAlt,
+    g_dpsReady ? "OK" : "ERR");
+}
 }
 
 void setup() {
@@ -95,4 +113,5 @@ void setup() {
 
 void loop() {
   updateSensors();
+  printDebug();
 }

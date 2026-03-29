@@ -7,8 +7,8 @@
 #include "ModbusMaster.h"
 
 constexpr uint8_t kRs485DePin = D2;
-constexpr uint8_t kModbusRxPin = 5;
-constexpr uint8_t kModbusTxPin = 4;
+constexpr uint8_t kModbusRxPin = D7;  // GPIO20 (UART0 default RX)
+constexpr uint8_t kModbusTxPin = D6;  // GPIO21 (UART0 default TX)
 constexpr uint8_t kLoggerLedPin = D1;
 constexpr uint8_t kSpiSckPin = 8;
 constexpr uint8_t kSpiMisoPin = 9;
@@ -144,6 +144,11 @@ void loop() {
     g_lastPollAt = millis();
     pollDevices();
     writeLogRecord();
+    Serial.printf("[logger] sd=%s  cycle=%s  air=[spd=%u as1=%u as2=%u batt=%u]  disp=[baro=%u pot1=%u pot2=%u batt=%u ultra=%u]\n",
+      g_sdReady ? "OK" : "ERR",
+      g_lastCycleOk ? "OK" : "ERR",
+      g_airDataBuffer[0], g_airDataBuffer[1], g_airDataBuffer[2], g_airDataBuffer[3],
+      g_displayBuffer[0], g_displayBuffer[1], g_displayBuffer[2], g_displayBuffer[3], g_displayBuffer[4]);
   }
 
   updateLed();

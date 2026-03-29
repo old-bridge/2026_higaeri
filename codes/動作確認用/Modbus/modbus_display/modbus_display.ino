@@ -5,7 +5,7 @@ const int DATASIZE = 10;
 #define REG_READ 0
 #define REG_WRITE 10
 #define REG_BAUD_CTRL 300   // Special register: write baud index (0..4) to change baud
-#define DE_PIN D3 // DE pin for RS485. master=loggerにあわせた。 
+#define DE_PIN D2 // DE pin for RS485. master=loggerにあわせた。 
 #define TRY_COUNT 1
 
 ModbusRTU mb;

@@ -7,12 +7,13 @@
 #include "ModbusSlave.h"
 
 constexpr uint8_t kRs485DePin = D3;
-constexpr uint8_t kModbusRxPin = 5;
-constexpr uint8_t kModbusTxPin = 4;
+constexpr uint8_t kModbusRxPin = D7;  // GPIO20 (UART0 default RX)
+constexpr uint8_t kModbusTxPin = D6;  // GPIO21 (UART0 default TX)
 constexpr uint8_t kSpiSckPin = 8;
 constexpr uint8_t kSpiMisoPin = 9;
 constexpr uint8_t kSpiMosiPin = 10;
 constexpr uint16_t kDisplayBackground = 0x5AEB;
+constexpr uint32_t kDebugPrintIntervalMs = 1000;
 
 struct DisplayD2Snapshot {
   uint16_t potentiometer1;
@@ -77,6 +78,7 @@ TFT_eSPI g_tft;
 DisplayD2Snapshot g_snapshot = {0, 0, 0, 0, 0, false, 0, 0};
 unsigned long g_lastPollAt = 0;
 unsigned long g_lastRenderAt = 0;
+unsigned long g_lastDebugAt = 0;
 
 void pollDisplayD2() {
   if (millis() - g_lastPollAt < kDisplayI2CPollIntervalMs) {
@@ -117,34 +119,45 @@ void renderDisplay() {
   }
   g_lastRenderAt = millis();
 
-  g_tft.fillScreen(kDisplayBackground);
+  // fillScreen() は 240x320 全ピクセルの SPI 書き込みで 20-50ms ブロックする。
+  // その間 task() が呼ばれず Modbus フレームを取りこぼす。
+  // 代わりに setTextColor(fg, bg) の背景色上書きで古い文字を消す。
   g_tft.setTextColor(TFT_WHITE, kDisplayBackground);
-  g_tft.drawCentreString("DISPLAY D1", 120, 8, 2);
 
+  // 固定幅文字列で上書きすることで fillScreen 不要
   char line[48];
-  int y = 30;
+  int y = 8;
 
-  snprintf(line, sizeof(line), "Airspeed : %u", g_slave.airspeed());
+  g_tft.drawCentreString("DISPLAY D1", 120, y, 2);
+  y = 30;
+
+  g_slave.task();  // Modbus フレームを逃さない
+
+  snprintf(line, sizeof(line), "Airspeed : %-6u", g_slave.airspeed());
   g_tft.drawString(line, 8, y, 2);
   y += 20;
 
-  snprintf(line, sizeof(line), "Baro Alt : %u", g_snapshot.baroAlt);
+  snprintf(line, sizeof(line), "Baro Alt : %-6u", g_snapshot.baroAlt);
   g_tft.drawString(line, 8, y, 2);
   y += 20;
 
-  snprintf(line, sizeof(line), "Pot1/Pot2: %u / %u", g_snapshot.potentiometer1, g_snapshot.potentiometer2);
+  g_slave.task();
+
+  snprintf(line, sizeof(line), "Pot1/Pot2: %-5u / %-5u", g_snapshot.potentiometer1, g_snapshot.potentiometer2);
   g_tft.drawString(line, 8, y, 2);
   y += 20;
 
-  snprintf(line, sizeof(line), "Battery  : %u", g_snapshot.batteryVoltage);
+  snprintf(line, sizeof(line), "Battery  : %-6u", g_snapshot.batteryVoltage);
   g_tft.drawString(line, 8, y, 2);
   y += 20;
 
-  snprintf(line, sizeof(line), "Ultrason.: %u", g_snapshot.ultrasonicAlt);
+  g_slave.task();
+
+  snprintf(line, sizeof(line), "Ultrason.: %-6u", g_snapshot.ultrasonicAlt);
   g_tft.drawString(line, 8, y, 2);
   y += 26;
 
-  snprintf(line, sizeof(line), "I2C %s", g_snapshot.connected ? "OK" : "ERROR");
+  snprintf(line, sizeof(line), "I2C %-8s", g_snapshot.connected ? "OK" : "ERROR");
   g_tft.setTextColor(g_snapshot.connected ? TFT_GREEN : TFT_RED, kDisplayBackground);
   g_tft.drawString(line, 8, y, 2);
   g_tft.setTextColor(TFT_WHITE, kDisplayBackground);
@@ -152,10 +165,27 @@ void renderDisplay() {
 
   snprintf(line,
            sizeof(line),
-           "OK:%lu ERR:%lu",
+           "OK:%-6lu ERR:%-6lu",
            static_cast<unsigned long>(g_snapshot.successCount),
            static_cast<unsigned long>(g_snapshot.failureCount));
   g_tft.drawString(line, 8, y, 2);
+}
+
+void printDebug() {
+  if (millis() - g_lastDebugAt < kDebugPrintIntervalMs) {
+    return;
+  }
+  g_lastDebugAt = millis();
+  Serial.printf("[display_d1] airspeed=%u  baro=%u  pot1=%u  pot2=%u  batt=%u  ultra=%u  i2c=%s  ok=%lu  err=%lu\n",
+    g_slave.airspeed(),
+    g_snapshot.baroAlt,
+    g_snapshot.potentiometer1,
+    g_snapshot.potentiometer2,
+    g_snapshot.batteryVoltage,
+    g_snapshot.ultrasonicAlt,
+    g_snapshot.connected ? "OK" : "ERR",
+    static_cast<unsigned long>(g_snapshot.successCount),
+    static_cast<unsigned long>(g_snapshot.failureCount));
 }
 }
 
@@ -179,4 +209,5 @@ void loop() {
   g_slave.setSensors(g_snapshot);
   g_slave.task();
   renderDisplay();
+  printDebug();
 }

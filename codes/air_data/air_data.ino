@@ -4,16 +4,17 @@
 #include "ModbusSlave.h"
 
 constexpr uint8_t kRs485DePin = D10;
-constexpr uint8_t kModbusRxPin = 5;
-constexpr uint8_t kModbusTxPin = 4;
+constexpr uint8_t kModbusRxPin = D7;  // GPIO20 (UART0 default RX)
+constexpr uint8_t kModbusTxPin = D6;  // GPIO21 (UART0 default TX)
 constexpr uint8_t kStatusLedPin = D0;
-constexpr uint8_t kEncoderPin = D1;
+constexpr uint8_t kEncoderPin = D8;
 constexpr uint8_t kBatterySensePin = A0;
 
 // Airspeed is derived from the pulse count measured in each 0.5 s window.
 constexpr uint32_t kAirspeedSampleWindowMs = 500;
-constexpr float kAirspeedSlope = 1.0f;
+constexpr float kAirspeedSlope = 1/300.0f;  // 仮置き
 constexpr float kAirspeedOffset = 0.0f;
+constexpr uint32_t kDebugPrintIntervalMs = 1000;
 
 
 struct AirDataSnapshot {
@@ -76,6 +77,7 @@ volatile uint32_t g_encoderPulseCount = 0;
 AirDataSnapshot g_snapshot = {0, 0, 0, 0};
 uint32_t g_lastSamplePulseCount = 0;
 unsigned long g_lastAirspeedSampleAt = 0;
+unsigned long g_lastDebugAt = 0;
 
 void IRAM_ATTR handleEncoderPulse() {
   g_encoderPulseCount++;
@@ -86,7 +88,7 @@ uint16_t convertPulseCountToWindSpeed(uint32_t pulseCountInWindow) {
   const float windSpeed = (kAirspeedSlope * static_cast<float>(pulseCountInWindow)) + kAirspeedOffset;
   
 
-  if (scaledWindSpeed <= 0.0f) {
+  if (windSpeed <= 0.0f) {
     return 0;
   }
   
@@ -112,6 +114,19 @@ void updateSensors() {
   g_snapshot.as5600Secondary = 0;
   g_snapshot.batteryRaw = analogRead(kBatterySensePin);
 }
+
+void printDebug() {
+  if (millis() - g_lastDebugAt < kDebugPrintIntervalMs) {
+    return;
+  }
+  g_lastDebugAt = millis();
+  Serial.printf("[air_data] windSpeed=%u  pulseTotal=%lu  battRaw=%u  as5600p=%u  as5600s=%u\n",
+    g_snapshot.windSpeed,
+    static_cast<unsigned long>(g_encoderPulseCount),
+    g_snapshot.batteryRaw,
+    g_snapshot.as5600Primary,
+    g_snapshot.as5600Secondary);
+}
 }
 
 void setup() {
@@ -132,4 +147,5 @@ void loop() {
   updateSensors();
   g_slave.setSnapshot(g_snapshot);
   g_slave.task();
+  printDebug();
 }
