@@ -10,7 +10,7 @@ constexpr uint8_t kStatusLedPin = D0;
 constexpr uint8_t kEncoderPin = D8;
 constexpr uint8_t kBatterySensePin = A0;
 
-// Airspeed is derived from the pulse count measured in each 0.5 s window.
+// Airspeed is derived from the pulse count per second measured over a ~0.5 s window.
 constexpr uint32_t kAirspeedSampleWindowMs = 500;
 constexpr float kAirspeedSlope = 1/300.0f;  // 仮置き
 constexpr float kAirspeedOffset = 0.0f;
@@ -83,29 +83,31 @@ void IRAM_ATTR handleEncoderPulse() {
   g_encoderPulseCount++;
 }
 
-uint16_t convertPulseCountToWindSpeed(uint32_t pulseCountInWindow) {
+uint16_t convertPulseCountToWindSpeed(uint32_t pulseCountInWindow, float elapsedSec) {
   // Replace this linear model once the actual calibration formula is fixed.
-  const float windSpeed = (kAirspeedSlope * static_cast<float>(pulseCountInWindow)) + kAirspeedOffset;
-  
+  const float pulsesPerSec = static_cast<float>(pulseCountInWindow) / elapsedSec;
+  const float windSpeed = (kAirspeedSlope * pulsesPerSec) + kAirspeedOffset;
 
   if (windSpeed <= 0.0f) {
     return 0;
   }
-  
+
   return static_cast<uint16_t>(windSpeed);
 }
 
 void updateWindSpeed() {
-  if (millis() - g_lastAirspeedSampleAt < kAirspeedSampleWindowMs) {
+  const unsigned long nowUs = micros();
+  if (nowUs - g_lastAirspeedSampleAt < kAirspeedSampleWindowMs * 1000UL) {
     return;
   }
 
   const uint32_t currentPulseCount = g_encoderPulseCount;
   const uint32_t pulseCountInWindow = currentPulseCount - g_lastSamplePulseCount;
+  const float elapsedSec = (nowUs - g_lastAirspeedSampleAt) / 1e6f;
 
-  g_snapshot.windSpeed = convertPulseCountToWindSpeed(pulseCountInWindow);
+  g_snapshot.windSpeed = convertPulseCountToWindSpeed(pulseCountInWindow, elapsedSec);
   g_lastSamplePulseCount = currentPulseCount;
-  g_lastAirspeedSampleAt = millis();
+  g_lastAirspeedSampleAt = nowUs;
 }
 
 void updateSensors() {
@@ -138,7 +140,7 @@ void setup() {
   pinMode(kEncoderPin, INPUT_PULLUP);
   pinMode(kBatterySensePin, INPUT);
   attachInterrupt(digitalPinToInterrupt(kEncoderPin), handleEncoderPulse, RISING);
-  g_lastAirspeedSampleAt = millis();
+  g_lastAirspeedSampleAt = micros();
 
   g_slave.begin();
 }
