@@ -1,3 +1,4 @@
+#include <Adafruit_DPS310.h>
 #include <HardwareSerial.h>
 #include <SPI.h>
 #include <TFT_eSPI.h>
@@ -14,6 +15,8 @@ constexpr uint8_t kSpiMisoPin = 9;
 constexpr uint8_t kSpiMosiPin = 10;
 constexpr uint16_t kDisplayBackground = 0x5AEB;
 constexpr uint32_t kDebugPrintIntervalMs = 1000;
+constexpr uint8_t kDps310I2CAddress = 0x76;
+constexpr float kSeaLevelPressureHpa = 1013.25f;
 
 struct DisplayD2Snapshot {
   uint16_t potentiometer1;
@@ -75,6 +78,8 @@ namespace {
 HardwareSerial MySerial0(0);
 DisplayD1SlaveNode g_slave(MySerial0);
 TFT_eSPI g_tft;
+Adafruit_DPS310 g_dps;
+bool g_dpsReady = false;
 DisplayD2Snapshot g_snapshot = {0, 0, 0, 0, 0, false, 0, 0};
 unsigned long g_lastPollAt = 0;
 unsigned long g_lastRenderAt = 0;
@@ -108,9 +113,25 @@ void pollDisplayD2() {
   g_snapshot.potentiometer2 = static_cast<uint16_t>((buffer[3] << 8) | buffer[2]);
   g_snapshot.batteryVoltage = static_cast<uint16_t>((buffer[5] << 8) | buffer[4]);
   g_snapshot.ultrasonicAlt = static_cast<uint16_t>((buffer[7] << 8) | buffer[6]);
-  g_snapshot.baroAlt = static_cast<uint16_t>((buffer[9] << 8) | buffer[8]);
   g_snapshot.connected = true;
   g_snapshot.successCount++;
+}
+
+void updateBarometricAltitude() {
+  if (!g_dpsReady) {
+    g_snapshot.baroAlt = 0;
+    return;
+  }
+
+  sensors_event_t temperatureEvent;
+  sensors_event_t pressureEvent;
+  if (!g_dps.getEvents(&temperatureEvent, &pressureEvent)) {
+    g_snapshot.baroAlt = 0;
+    return;
+  }
+
+  const float altitudeMeters = g_dps.readAltitude(kSeaLevelPressureHpa);
+  g_snapshot.baroAlt = static_cast<uint16_t>(altitudeMeters * 10.0f);
 }
 
 void renderDisplay() {
@@ -196,6 +217,12 @@ void setup() {
   Wire.begin();
   Wire.setClock(400000);
 
+  g_dpsReady = g_dps.begin_I2C(kDps310I2CAddress, &Wire);
+  if (g_dpsReady) {
+    g_dps.configurePressure(DPS310_64HZ, DPS310_64SAMPLES);
+    g_dps.configureTemperature(DPS310_64HZ, DPS310_64SAMPLES);
+  }
+
   SPI.begin(kSpiSckPin, kSpiMisoPin, kSpiMosiPin);
   g_tft.init();
   g_tft.setRotation(0);
@@ -206,6 +233,7 @@ void setup() {
 
 void loop() {
   pollDisplayD2();
+  updateBarometricAltitude();
   g_slave.setSensors(g_snapshot);
   g_slave.task();
   renderDisplay();
