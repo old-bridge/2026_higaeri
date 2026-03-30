@@ -1,4 +1,3 @@
-#include <Adafruit_DPS310.h>
 #include <Wire.h>
 
 #include "DisplayD2Config.h"
@@ -15,16 +14,13 @@ struct DisplayD2Payload {
   uint16_t potentiometer2;
   uint16_t batteryVoltage;
   uint16_t ultrasonicAlt;
-  uint16_t baroAlt;
 };
 
 
 constexpr uint32_t kDebugPrintIntervalMs = 1000;
 
 namespace {
-Adafruit_DPS310 g_dps;
-bool g_dpsReady = false;
-DisplayD2Payload g_payload = {0, 0, 0, 0, 0};
+DisplayD2Payload g_payload = {0, 0, 0, 0};
 unsigned long g_lastUpdateAt = 0;
 unsigned long g_lastDebugAt = 0;
 
@@ -38,26 +34,7 @@ void writePayload() {
   buffer[5] = static_cast<uint8_t>(g_payload.batteryVoltage >> 8);
   buffer[6] = static_cast<uint8_t>(g_payload.ultrasonicAlt & 0xFF);
   buffer[7] = static_cast<uint8_t>(g_payload.ultrasonicAlt >> 8);
-  buffer[8] = static_cast<uint8_t>(g_payload.baroAlt & 0xFF);
-  buffer[9] = static_cast<uint8_t>(g_payload.baroAlt >> 8);
   Wire.write(buffer, kDisplayD2PayloadSize);
-}
-
-void updateBarometricAltitude() {
-  if (!g_dpsReady) {
-    g_payload.baroAlt = 0;
-    return;
-  }
-
-  sensors_event_t temperatureEvent;
-  sensors_event_t pressureEvent;
-  if (!g_dps.getEvents(&temperatureEvent, &pressureEvent)) {
-    g_payload.baroAlt = 0;
-    return;
-  }
-
-  const float altitudeMeters = g_dps.readAltitude(kSeaLevelPressureHpa);
-  g_payload.baroAlt = static_cast<uint16_t>(altitudeMeters * 10.0f);
 }
 
 void updateSensors() {
@@ -70,7 +47,6 @@ void updateSensors() {
   g_payload.potentiometer2 = analogRead(kPot2Pin);
   g_payload.batteryVoltage = analogRead(kBatteryPin);
   g_payload.ultrasonicAlt = 0;
-  updateBarometricAltitude();
 }
 
 void printDebug() {
@@ -78,13 +54,11 @@ void printDebug() {
     return;
   }
   g_lastDebugAt = millis();
-  Serial.printf("[display_d2] pot1=%u  pot2=%u  batt=%u  ultra=%u  baro=%u  dps=%s\n",
+  Serial.printf("[display_d2] pot1=%u  pot2=%u  batt=%u  ultra=%u\n",
     g_payload.potentiometer1,
     g_payload.potentiometer2,
     g_payload.batteryVoltage,
-    g_payload.ultrasonicAlt,
-    g_payload.baroAlt,
-    g_dpsReady ? "OK" : "ERR");
+    g_payload.ultrasonicAlt);
 }
 }
 
@@ -103,12 +77,6 @@ void setup() {
 
   Wire.begin(kDisplayD2I2CAddress);
   Wire.onRequest(writePayload);
-
-  g_dpsReady = g_dps.begin_I2C(kDps310Address, &Wire);
-  if (g_dpsReady) {
-    g_dps.configurePressure(DPS310_64HZ, DPS310_64SAMPLES);
-    g_dps.configureTemperature(DPS310_64HZ, DPS310_64SAMPLES);
-  }
 }
 
 void loop() {
