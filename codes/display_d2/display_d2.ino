@@ -8,6 +8,7 @@ constexpr uint8_t kBatteryPin = A2;
 constexpr uint8_t kUltrasonicRxPin = D0;
 constexpr uint8_t kUltrasonicTxPin = D1;
 constexpr uint8_t kStatusLedPin = D10;
+constexpr uint8_t kBuzzerPin = D3;
 
 struct DisplayD2Payload {
   uint16_t potentiometer1;
@@ -23,6 +24,7 @@ namespace {
 DisplayD2Payload g_payload = {0, 0, 0, 0};
 unsigned long g_lastUpdateAt = 0;
 unsigned long g_lastDebugAt = 0;
+volatile bool g_rollAlarm = false;
 
 void writePayload() {
   uint8_t buffer[kDisplayD2PayloadSize] = {0};
@@ -54,12 +56,19 @@ void printDebug() {
     return;
   }
   g_lastDebugAt = millis();
-  Serial.printf("[display_d2] pot1=%u  pot2=%u  batt=%u  ultra=%u\n",
+  Serial.printf("[display_d2] pot1=%u  pot2=%u  batt=%u  ultra=%u  roll_alarm=%s\n",
     g_payload.potentiometer1,
     g_payload.potentiometer2,
     g_payload.batteryVoltage,
-    g_payload.ultrasonicAlt);
+    g_payload.ultrasonicAlt,
+    g_rollAlarm ? "ON" : "OFF");
 }
+}
+
+void onI2CReceive(int len) {
+  if (len < 1) return;
+  g_rollAlarm = (Wire.read() != 0);
+  while (Wire.available()) Wire.read();  // 余分バイトを捨てる
 }
 
 void setup() {
@@ -68,6 +77,7 @@ void setup() {
   digitalWrite(kStatusLedPin, HIGH);
   delay(100);
 
+  pinMode(kBuzzerPin, OUTPUT);
   pinMode(kPot1Pin, INPUT);
   pinMode(kPot2Pin, INPUT);
   pinMode(kBatteryPin, INPUT);
@@ -77,9 +87,16 @@ void setup() {
 
   Wire.begin(kDisplayD2I2CAddress);
   Wire.onRequest(writePayload);
+  Wire.onReceive(onI2CReceive);
 }
 
 void loop() {
   updateSensors();
   printDebug();
+
+  if (g_rollAlarm) {
+    tone(kBuzzerPin, 1000);
+  } else {
+    noTone(kBuzzerPin);
+  }
 }

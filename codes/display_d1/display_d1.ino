@@ -58,6 +58,10 @@ public:
     return airspeed_;
   }
 
+  uint16_t rollAlarm() const {
+    return rollAlarm_;
+  }
+
   void task() {
     setHoldingValue(kDisplayBaroRegister, sensors_.baroAlt);
     setHoldingValue(kDisplayPot1Register, sensors_.potentiometer1);
@@ -79,8 +83,10 @@ protected:
   }
 
   uint16_t onWriteRegister(TRegister* reg, uint16_t newValue) override {
-    if (reg->address.address == kDisplayWriteStart) {
+    if (reg->address.address == kDisplayAirspeedWriteRegister) {
       airspeed_ = newValue;
+    } else if (reg->address.address == kDisplayRollAlarmWriteRegister) {
+      rollAlarm_ = newValue;
     }
     return newValue;
   }
@@ -88,6 +94,7 @@ protected:
 private:
   DisplayD2Snapshot sensors_ = {0, 0, 0, 0, 0, false, 0, 0};
   uint16_t airspeed_ = 0;
+  uint16_t rollAlarm_ = 0;
 };
 
 namespace {
@@ -195,7 +202,11 @@ void pollDisplayD2() {
   g_snapshot.ultrasonicAlt = static_cast<uint16_t>((buffer[7] << 8) | buffer[6]);
   g_snapshot.connected = true;
   g_snapshot.successCount++;
-}
+
+  // roll alarm をdisplay_d2 に送信（断線時は無視）
+  Wire.beginTransmission(kDisplayD2I2CAddress);
+  Wire.write(static_cast<uint8_t>(g_slave.rollAlarm()));
+  Wire.endTransmission();
 
 void updateBarometricAltitude() {
   if (!g_dpsReady) {

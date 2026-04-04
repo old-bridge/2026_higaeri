@@ -6,6 +6,7 @@
 constexpr uint32_t kDebugBaudRate = 115200;
 constexpr uint32_t kModbusBaudRate = 9600;
 constexpr uint32_t kLoggerPollIntervalMs = 1000;
+constexpr uint32_t kRollAlarmWriteIntervalMs = 200;
 constexpr uint32_t kModbusTimeoutMs = 1000;
 constexpr uint8_t kAirDataSlaveId = 1;
 constexpr uint8_t kDisplaySlaveId = 2;
@@ -18,6 +19,11 @@ constexpr uint16_t kAirDataWriteCount = 1;
 constexpr uint16_t kDisplayReadStart = 0;
 constexpr uint16_t kDisplayReadCount = 5;
 constexpr uint16_t kDisplayWriteStart = 10;
-constexpr uint16_t kDisplayWriteCount = 1;
+constexpr uint16_t kDisplayWriteCount = 2;
+
+enum DisplayWriteRegister : uint16_t {
+  kDisplayAirspeedWriteRegister = kDisplayWriteStart,
+  kDisplayRollAlarmWriteRegister
+};
 
 #endif

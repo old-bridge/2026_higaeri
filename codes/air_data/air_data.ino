@@ -1,4 +1,6 @@
+#include <esp_now.h>
 #include <HardwareSerial.h>
+#include <WiFi.h>
 
 #include "ModbusConfig.h"
 #include "ModbusSlave.h"
@@ -15,6 +17,17 @@ constexpr uint32_t kAirspeedSampleWindowMs = 500;
 constexpr float kAirspeedSlope = 1/300.0f;  // 仮置き
 constexpr float kAirspeedOffset = 0.0f;
 constexpr uint32_t kDebugPrintIntervalMs = 1000;
+constexpr uint32_t kEspNowSendIntervalMs = 500;
+
+struct EspNowAirDataPacket {
+  uint8_t  deviceId;        // 0x01 = air_data
+  uint8_t  reserved;
+  uint16_t windSpeed;
+  uint16_t as5600Primary;
+  uint16_t as5600Secondary;
+  uint16_t batteryRaw;
+  uint32_t sequenceNumber;
+};
 
 
 struct AirDataSnapshot {
@@ -78,6 +91,27 @@ AirDataSnapshot g_snapshot = {0, 0, 0, 0};
 uint32_t g_lastSamplePulseCount = 0;
 unsigned long g_lastAirspeedSampleAt = 0;
 unsigned long g_lastDebugAt = 0;
+unsigned long g_lastEspNowSendAt = 0;
+uint32_t g_espNowSequence = 0;
+const uint8_t kBroadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+void sendEspNow() {
+  if (millis() - g_lastEspNowSendAt < kEspNowSendIntervalMs) {
+    return;
+  }
+  g_lastEspNowSendAt = millis();
+
+  EspNowAirDataPacket packet;
+  packet.deviceId        = 0x01;
+  packet.reserved        = 0;
+  packet.windSpeed       = g_snapshot.windSpeed;
+  packet.as5600Primary   = g_snapshot.as5600Primary;
+  packet.as5600Secondary = g_snapshot.as5600Secondary;
+  packet.batteryRaw      = g_snapshot.batteryRaw;
+  packet.sequenceNumber  = ++g_espNowSequence;
+
+  esp_now_send(kBroadcastAddress, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+}
 
 void IRAM_ATTR handleEncoderPulse() {
   g_encoderPulseCount++;
@@ -143,11 +177,25 @@ void setup() {
   g_lastAirspeedSampleAt = micros();
 
   g_slave.begin();
+
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  if (esp_now_init() == ESP_OK) {
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, kBroadcastAddress, 6);
+    peer.channel = 0;
+    peer.encrypt = false;
+    esp_now_add_peer(&peer);
+    Serial.println("[air_data] ESP-NOW init OK");
+  } else {
+    Serial.println("[air_data] ESP-NOW init FAILED");
+  }
 }
 
 void loop() {
   updateSensors();
   g_slave.setSnapshot(g_snapshot);
   g_slave.task();
+  sendEspNow();
   printDebug();
 }
