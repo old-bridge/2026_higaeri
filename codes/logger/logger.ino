@@ -42,10 +42,15 @@ HardwareSerial MySerial0(0);
 ModbusMaster g_master(MySerial0, kRs485DePin, kModbusRxPin, kModbusTxPin);
 uint16_t g_airDataBuffer[kAirDataReadCount] = {0};
 uint16_t g_displayBuffer[kDisplayReadCount] = {0};
+uint16_t g_pendingAirspeed = 0;  // writeHreg に渡すポインタの寿命を保証
 bool g_sdReady = false;
-bool g_lastCycleOk = false;
+bool g_lastAirOk = false;
+bool g_lastDisplayOk = false;
 bool g_ledState = false;
-unsigned long g_lastPollAt = 0;
+unsigned long g_lastAirReadAt = 0;
+unsigned long g_lastAirWriteAt = 0;
+unsigned long g_lastDisplayReadAt = 0;
+unsigned long g_lastLogAt = 0;
 unsigned long g_lastLedToggleAt = 0;
 EspNowAirDataPacket g_espNowLatest = {};
 unsigned long g_espNowLastReceivedAt = 0;
@@ -168,14 +173,29 @@ static void writeRollAlarm() {
   g_master.writeHoldingRegisters(kDisplaySlaveId, kDisplayRollAlarmWriteRegister, &alarm, 1);
 }
 
-void clearBuffers() {
-  for (uint16_t& value : g_airDataBuffer) {
-    value = 0;
+// --- Modbus コールバック ---
+
+bool cbAir(Modbus::ResultCode event, uint16_t, void*) {
+  g_lastAirOk = (event == Modbus::EX_SUCCESS);
+  if (!g_lastAirOk) {
+    for (uint16_t& v : g_airDataBuffer) v = 0;
   }
-  for (uint16_t& value : g_displayBuffer) {
-    value = 0;
-  }
+  return true;
 }
+
+bool cbWrite(Modbus::ResultCode, uint16_t, void*) {
+  return true;
+}
+
+bool cbDisplay(Modbus::ResultCode event, uint16_t, void*) {
+  g_lastDisplayOk = (event == Modbus::EX_SUCCESS);
+  if (!g_lastDisplayOk) {
+    for (uint16_t& v : g_displayBuffer) v = 0;
+  }
+  return true;
+}
+
+// --- SD / ログ ---
 
 void initSdCard() {
   if (!SD.begin(kSdChipSelectPin)) {
@@ -194,8 +214,9 @@ void initSdCard() {
   g_sdReady = true;
 }
 
-void pollDevices() {
-  g_lastCycleOk = true;
+void runLog() {
+  if (millis() - g_lastLogAt < kLogIntervalMs) return;
+  g_lastLogAt = millis();
 
   if (!g_master.readHoldingRegisters(kAirDataSlaveId, kAirDataReadStart, g_airDataBuffer, kAirDataReadCount)) {
     g_modbusConsecutiveFailures++;
@@ -229,10 +250,7 @@ void pollDevices() {
   }
 }
 
-void writeLogRecord() {
-  if (!g_sdReady) {
-    return;
-  }
+// --- Modbus スケジューラ ---
 
   char timestamp[24];
   getRtcTimestamp(timestamp, sizeof(timestamp));
@@ -253,16 +271,18 @@ void writeLogRecord() {
            g_displayBuffer[4],
            g_imuData.roll, g_imuData.pitch, g_imuData.yaw);
 
-  File file = SD.open(kLogFilePath, FILE_APPEND);
-  if (!file) {
-    g_lastCycleOk = false;
-    return;
+  const unsigned long now = millis();
+  if (now - g_lastAirReadAt >= kAirReadIntervalMs) {
+    g_lastAirReadAt = now;
+    g_master.readHoldingRegistersAsync(kAirDataSlaveId, kAirDataReadStart, g_airDataBuffer, kAirDataReadCount, cbAir);
+  } else if (now - g_lastAirWriteAt >= kAirWriteIntervalMs) {
+    g_lastAirWriteAt = now;
+    g_pendingAirspeed = g_airDataBuffer[0];
+    g_master.writeHoldingRegistersAsync(kDisplaySlaveId, kDisplayWriteStart, &g_pendingAirspeed, 1, cbWrite);
+  } else if (now - g_lastDisplayReadAt >= kDisplayReadIntervalMs) {
+    g_lastDisplayReadAt = now;
+    g_master.readHoldingRegistersAsync(kDisplaySlaveId, kDisplayReadStart, g_displayBuffer, kDisplayReadCount, cbDisplay);
   }
-
-  if (!file.print(record)) {
-    g_lastCycleOk = false;
-  }
-  file.close();
 }
 
 }  // namespace
@@ -281,7 +301,7 @@ void onEspNowReceive(const uint8_t* macAddr, const uint8_t* data, int len) {
 
 namespace {
 void updateLed() {
-  if (g_lastCycleOk) {
+  if (g_lastAirOk && g_lastDisplayOk) {
     if (millis() - g_lastLedToggleAt >= kLedBlinkIntervalMs) {
       g_lastLedToggleAt = millis();
       g_ledState = !g_ledState;
@@ -303,7 +323,6 @@ void setup() {
 
   SPI.begin(kSpiSckPin, kSpiMisoPin, kSpiMosiPin, kSdChipSelectPin);
   initSdCard();
-  clearBuffers();
   g_master.begin();
 
   Wire.begin();

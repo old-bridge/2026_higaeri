@@ -11,6 +11,11 @@ constexpr uint32_t kModbusTimeoutMs = 1000;
 constexpr uint8_t kAirDataSlaveId = 1;
 constexpr uint8_t kDisplaySlaveId = 2;
 
+constexpr uint32_t kAirReadIntervalMs = 500;
+constexpr uint32_t kAirWriteIntervalMs = 500;
+constexpr uint32_t kDisplayReadIntervalMs = 1000;
+constexpr uint32_t kLogIntervalMs = 200;
+
 constexpr uint16_t kAirDataReadStart = 0;
 constexpr uint16_t kAirDataReadCount = 4;
 constexpr uint16_t kAirDataWriteStart = 10;

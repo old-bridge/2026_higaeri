@@ -12,23 +12,16 @@ public:
 
   void begin();
   void task();
-  bool readHoldingRegisters(uint8_t slaveId, uint16_t startAddress, uint16_t* buffer, uint16_t count);
-  bool writeHoldingRegisters(uint8_t slaveId, uint16_t startAddress, const uint16_t* values, uint16_t count);
+  bool isBusy();
+  bool readHoldingRegistersAsync(uint8_t slaveId, uint16_t startAddress, uint16_t* buffer, uint16_t count, cbTransaction callback);
+  bool writeHoldingRegistersAsync(uint8_t slaveId, uint16_t startAddress, const uint16_t* values, uint16_t count, cbTransaction callback);
 
 private:
-  static bool handleReadResult(Modbus::ResultCode event, uint16_t transactionId, void* data);
-  static bool handleWriteResult(Modbus::ResultCode event, uint16_t transactionId, void* data);
-  bool waitForResponse();
-
   ModbusRTU modbus_;
   HardwareSerial* serial_;
   uint8_t dePin_;
   uint8_t rxPin_;
   uint8_t txPin_;
-  bool waitingForResponse_;
-  Modbus::ResultCode lastResult_;
-
-  static ModbusMaster* activeInstance_;
 };
 
 #endif
