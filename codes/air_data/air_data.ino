@@ -1,6 +1,7 @@
 #include <esp_now.h>
 #include <HardwareSerial.h>
 #include <WiFi.h>
+#include <Wire.h>
 
 #include "ModbusConfig.h"
 #include "ModbusSlave.h"
@@ -11,6 +12,11 @@ constexpr uint8_t kModbusTxPin = D6;  // GPIO21 (UART0 default TX)
 constexpr uint8_t kStatusLedPin = D0;
 constexpr uint8_t kEncoderPin = D8;
 constexpr uint8_t kBatterySensePin = A0;
+constexpr uint8_t kAosSdaPin = D2;   // ソフトウェアI2C SDA (AoS)
+constexpr uint8_t kAosSclPin = D3;   // ソフトウェアI2C SCL (AoS)
+
+constexpr uint8_t  kAs5600Address  = 0x36;
+constexpr uint8_t  kAs5600RegAngle = 0x0C;
 
 // Airspeed is derived from the pulse count per second measured over a ~0.5 s window.
 constexpr uint32_t kAirspeedSampleWindowMs = 500;
@@ -144,10 +150,23 @@ void updateWindSpeed() {
   g_lastAirspeedSampleAt = nowUs;
 }
 
+uint16_t readAS5600(TwoWire& wire) {
+  wire.beginTransmission(kAs5600Address);
+  wire.write(kAs5600RegAngle);
+  wire.endTransmission(false);
+  wire.requestFrom(kAs5600Address, 2);
+  uint16_t raw = 0;
+  raw  = ((uint16_t)wire.read() << 8) & 0x0F00;
+  raw |= (uint16_t)wire.read();
+  return raw;
+}
+
 void updateSensors() {
   updateWindSpeed();
-  g_snapshot.as5600Primary = 0;
-  g_snapshot.as5600Secondary = 0;
+  uint16_t AoA = readAS5600(Wire);   // 迎え角: ハードウェアI2C
+  uint16_t AoS = readAS5600(Wire1);  // 横滑り角: ソフトウェアI2C (D2/D3)
+  g_snapshot.as5600Primary   = AoA;
+  g_snapshot.as5600Secondary = AoS;
   g_snapshot.batteryRaw = analogRead(kBatterySensePin);
 }
 
@@ -175,6 +194,13 @@ void setup() {
   pinMode(kBatterySensePin, INPUT);
   attachInterrupt(digitalPinToInterrupt(kEncoderPin), handleEncoderPulse, RISING);
   g_lastAirspeedSampleAt = micros();
+
+  // ハードウェアI2C (AoA: 迎え角)
+  Wire.begin();
+  Wire.setClock(400000);
+  // ソフトウェアI2C (AoS: 横滑り角): D2=SDA, D3=SCL
+  Wire1.begin(kAosSdaPin, kAosSclPin);
+  Wire1.setClock(400000);
 
   g_slave.begin();
 
