@@ -121,6 +121,7 @@ void setup() {
   g_tft.fillScreen(kBgColor);
 
   WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.disconnect();
 
   Serial.print("[RX] MAC address: ");

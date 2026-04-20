@@ -23,11 +23,25 @@ constexpr uint8_t kSdChipSelectPin = 5;
 constexpr uint32_t kModbusFailureThreshold = 3;
 // ESP-NOW パケットがこの時間 (ms) 以内に届いていれば有効とみなす
 constexpr uint32_t kEspNowStaleMs = 2000;
+constexpr uint8_t kAirDataEspNowDeviceId = 0x01;
+constexpr uint8_t kWindEspNowDeviceId = 0x03;
+
+struct EspNowLegacyPacket {
+  uint8_t  deviceId;
+  uint8_t  reserved;
+  uint16_t windSpeed;
+  uint16_t as5600Primary;
+  uint16_t as5600Secondary;
+  uint16_t batteryRaw;
+  uint32_t sequenceNumber;
+};
 
 struct EspNowAirDataPacket {
   uint8_t  deviceId;
   uint8_t  reserved;
   uint16_t windSpeed;
+  uint16_t pulseCountMin;
+  uint16_t pulseCountMax;
   uint16_t as5600Primary;
   uint16_t as5600Secondary;
   uint16_t batteryRaw;
@@ -46,16 +60,21 @@ uint16_t g_pendingAirspeed = 0;  // writeHreg に渡すポインタの寿命を�
 bool g_sdReady = false;
 bool g_lastAirOk = false;
 bool g_lastDisplayOk = false;
+bool g_lastCycleOk = true;
 bool g_ledState = false;
 unsigned long g_lastAirReadAt = 0;
 unsigned long g_lastAirWriteAt = 0;
 unsigned long g_lastDisplayReadAt = 0;
 unsigned long g_lastLogAt = 0;
+unsigned long g_lastPollAt = 0;
 unsigned long g_lastLedToggleAt = 0;
-EspNowAirDataPacket g_espNowLatest = {};
-unsigned long g_espNowLastReceivedAt = 0;
+EspNowAirDataPacket g_airEspNowLatest = {};
+EspNowLegacyPacket g_windEspNowLatest = {};
+unsigned long g_airEspNowLastReceivedAt = 0;
+unsigned long g_windEspNowLastReceivedAt = 0;
 uint32_t g_modbusConsecutiveFailures = 0;
 unsigned long g_lastAlarmWriteAt = 0;
+uint16_t g_lastRollAlarmValue = 0xFFFF;
 
 // ---- DS3231 RTC (Wire直接使用) ----------------------------------------
 constexpr uint8_t kRtcI2cAddr = 0x68;
@@ -170,7 +189,15 @@ static void readIMUData() {
 
 static void writeRollAlarm() {
   const uint16_t alarm = (g_imuData.roll > 5.0f || g_imuData.roll < -5.0f) ? uint16_t(1) : uint16_t(0);
-  g_master.writeHoldingRegisters(kDisplaySlaveId, kDisplayRollAlarmWriteRegister, &alarm, 1);
+  if (alarm == g_lastRollAlarmValue) {
+    return;
+  }
+
+  if (g_master.writeHoldingRegisters(kDisplaySlaveId, kDisplayRollAlarmWriteRegister, &alarm, 1)) {
+    g_lastRollAlarmValue = alarm;
+  } else {
+    g_lastCycleOk = false;
+  }
 }
 
 // --- Modbus コールバック ---
@@ -206,7 +233,7 @@ void initSdCard() {
   if (!SD.exists(kLogFilePath)) {
     File file = SD.open(kLogFilePath, FILE_WRITE);
     if (file) {
-      file.println("timestamp,airspeed,as5600_1,as5600_2,air_battery,baro_alt,pot1,pot2,display_battery,ultrasonic,roll,pitch,yaw");
+      file.println("timestamp,airspeed,pulse_min,pulse_max,wind_board_airspeed,as5600_1,as5600_2,air_battery,baro_alt,pot1,pot2,display_battery,ultrasonic,roll,pitch,yaw");
       file.close();
     }
   }
@@ -214,20 +241,19 @@ void initSdCard() {
   g_sdReady = true;
 }
 
-void runLog() {
-  if (millis() - g_lastLogAt < kLogIntervalMs) return;
-  g_lastLogAt = millis();
-
-  if (!g_master.readHoldingRegisters(kAirDataSlaveId, kAirDataReadStart, g_airDataBuffer, kAirDataReadCount)) {
+void pollDevices() {
+  g_lastCycleOk = true;
+  g_lastAirOk = g_master.readHoldingRegisters(kAirDataSlaveId, kAirDataReadStart, g_airDataBuffer, kAirDataReadCount);
+  if (!g_lastAirOk) {
     g_modbusConsecutiveFailures++;
     g_lastCycleOk = false;
-    const bool espNowFresh = (millis() - g_espNowLastReceivedAt) < kEspNowStaleMs;
+    const bool espNowFresh = (millis() - g_airEspNowLastReceivedAt) < kEspNowStaleMs;
     if (g_modbusConsecutiveFailures >= kModbusFailureThreshold && espNowFresh) {
       // RS485 失敗: ESP-NOW の最終受信値をフォールバックとして使用
-      g_airDataBuffer[0] = g_espNowLatest.windSpeed;
-      g_airDataBuffer[1] = g_espNowLatest.as5600Primary;
-      g_airDataBuffer[2] = g_espNowLatest.as5600Secondary;
-      g_airDataBuffer[3] = g_espNowLatest.batteryRaw;
+      g_airDataBuffer[0] = g_airEspNowLatest.windSpeed;
+      g_airDataBuffer[1] = g_airEspNowLatest.as5600Primary;
+      g_airDataBuffer[2] = g_airEspNowLatest.as5600Secondary;
+      g_airDataBuffer[3] = g_airEspNowLatest.batteryRaw;
     } else {
       for (uint16_t& value : g_airDataBuffer) {
         value = 0;
@@ -238,7 +264,8 @@ void runLog() {
   }
 
   const uint16_t airspeed = g_airDataBuffer[0];
-  if (!g_master.writeHoldingRegisters(kDisplaySlaveId, kDisplayAirspeedWriteRegister, &airspeed, 1)) {
+  g_lastDisplayOk = g_master.writeHoldingRegisters(kDisplaySlaveId, kDisplayAirspeedWriteRegister, &airspeed, 1);
+  if (!g_lastDisplayOk) {
     g_lastCycleOk = false;
   }
 
@@ -250,17 +277,26 @@ void runLog() {
   }
 }
 
-// --- Modbus スケジューラ ---
+void writeLogRecord() {
+  if (millis() - g_lastLogAt < kLogIntervalMs) return;
+  g_lastLogAt = millis();
 
   char timestamp[24];
   getRtcTimestamp(timestamp, sizeof(timestamp));
 
-  char record[256];
+  const bool airEspNowFresh = (millis() - g_airEspNowLastReceivedAt) < kEspNowStaleMs;
+  const uint16_t airPulseMin = airEspNowFresh ? g_airEspNowLatest.pulseCountMin : 0;
+  const uint16_t airPulseMax = airEspNowFresh ? g_airEspNowLatest.pulseCountMax : 0;
+
+  char record[320];
   snprintf(record,
            sizeof(record),
-           "%s,%u,%u,%u,%u,%u,%u,%u,%u,%u,%.2f,%.2f,%.2f\n",
+           "%s,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%.2f,%.2f,%.2f\n",
            timestamp,
            g_airDataBuffer[0],
+           airPulseMin,
+           airPulseMax,
+           g_windEspNowLatest.windSpeed,
            g_airDataBuffer[1],
            g_airDataBuffer[2],
            g_airDataBuffer[3],
@@ -271,32 +307,56 @@ void runLog() {
            g_displayBuffer[4],
            g_imuData.roll, g_imuData.pitch, g_imuData.yaw);
 
-  const unsigned long now = millis();
-  if (now - g_lastAirReadAt >= kAirReadIntervalMs) {
-    g_lastAirReadAt = now;
-    g_master.readHoldingRegistersAsync(kAirDataSlaveId, kAirDataReadStart, g_airDataBuffer, kAirDataReadCount, cbAir);
-  } else if (now - g_lastAirWriteAt >= kAirWriteIntervalMs) {
-    g_lastAirWriteAt = now;
-    g_pendingAirspeed = g_airDataBuffer[0];
-    g_master.writeHoldingRegistersAsync(kDisplaySlaveId, kDisplayWriteStart, &g_pendingAirspeed, 1, cbWrite);
-  } else if (now - g_lastDisplayReadAt >= kDisplayReadIntervalMs) {
-    g_lastDisplayReadAt = now;
-    g_master.readHoldingRegistersAsync(kDisplaySlaveId, kDisplayReadStart, g_displayBuffer, kDisplayReadCount, cbDisplay);
+  if (!g_sdReady) {
+    g_lastCycleOk = false;
+    return;
   }
+
+  File file = SD.open(kLogFilePath, FILE_APPEND);
+  if (!file) {
+    g_lastCycleOk = false;
+    g_sdReady = false;
+    return;
+  }
+
+  file.print(record);
+  file.close();
 }
 
 }  // namespace
 
 void onEspNowReceive(const uint8_t* macAddr, const uint8_t* data, int len) {
-  if (len != sizeof(EspNowAirDataPacket)) {
+  if (len < 1) {
     return;
   }
-  const EspNowAirDataPacket* packet = reinterpret_cast<const EspNowAirDataPacket*>(data);
-  if (packet->deviceId != 0x01) {
-    return;  // air_data 以外のデバイスは無視
+  const uint8_t deviceId = data[0];
+  if (deviceId == kAirDataEspNowDeviceId) {
+    if (len == static_cast<int>(sizeof(EspNowAirDataPacket))) {
+      g_airEspNowLatest = *reinterpret_cast<const EspNowAirDataPacket*>(data);
+    } else if (len == static_cast<int>(sizeof(EspNowLegacyPacket))) {
+      const EspNowLegacyPacket* legacyPacket = reinterpret_cast<const EspNowLegacyPacket*>(data);
+      g_airEspNowLatest.deviceId = legacyPacket->deviceId;
+      g_airEspNowLatest.reserved = legacyPacket->reserved;
+      g_airEspNowLatest.windSpeed = legacyPacket->windSpeed;
+      g_airEspNowLatest.pulseCountMin = 0;
+      g_airEspNowLatest.pulseCountMax = 0;
+      g_airEspNowLatest.as5600Primary = legacyPacket->as5600Primary;
+      g_airEspNowLatest.as5600Secondary = legacyPacket->as5600Secondary;
+      g_airEspNowLatest.batteryRaw = legacyPacket->batteryRaw;
+      g_airEspNowLatest.sequenceNumber = legacyPacket->sequenceNumber;
+    } else {
+      return;
+    }
+    g_airEspNowLastReceivedAt = millis();
+    return;
   }
-  g_espNowLatest = *packet;
-  g_espNowLastReceivedAt = millis();
+  if (deviceId == kWindEspNowDeviceId) {
+    if (len != static_cast<int>(sizeof(EspNowLegacyPacket))) {
+      return;
+    }
+    g_windEspNowLatest = *reinterpret_cast<const EspNowLegacyPacket*>(data);
+    g_windEspNowLastReceivedAt = millis();
+  }
 }
 
 namespace {
@@ -337,6 +397,7 @@ void setup() {
   }
 
   WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.disconnect();
   if (esp_now_init() == ESP_OK) {
     esp_now_register_recv_cb(onEspNowReceive);
@@ -360,15 +421,17 @@ void loop() {
     pollDevices();
     writeLogRecord();
     const bool usingFallback = g_modbusConsecutiveFailures >= kModbusFailureThreshold
-                              && (millis() - g_espNowLastReceivedAt) < kEspNowStaleMs;
+                              && (millis() - g_airEspNowLastReceivedAt) < kEspNowStaleMs;
     char ts[24];
     getRtcTimestamp(ts, sizeof(ts));
-    Serial.printf("[logger] %s  sd=%s  cycle=%s  src=%s  air=[spd=%u as1=%u as2=%u batt=%u]  disp=[baro=%u pot1=%u pot2=%u batt=%u ultra=%u]  imu=[r=%.1f p=%.1f y=%.1f]\n",
+    Serial.printf("[logger] %s  sd=%s  cycle=%s  src=%s  air=[spd=%u pmin=%u pmax=%u as1=%u as2=%u batt=%u]  wind=[spd=%u seq=%lu]  disp=[baro=%u pot1=%u pot2=%u batt=%u ultra=%u]  imu=[r=%.1f p=%.1f y=%.1f]\n",
       ts,
       g_sdReady ? "OK" : "ERR",
       g_lastCycleOk ? "OK" : "ERR",
       usingFallback ? "ESPNOW" : "RS485",
-      g_airDataBuffer[0], g_airDataBuffer[1], g_airDataBuffer[2], g_airDataBuffer[3],
+      g_airDataBuffer[0], g_airEspNowLatest.pulseCountMin, g_airEspNowLatest.pulseCountMax,
+      g_airDataBuffer[1], g_airDataBuffer[2], g_airDataBuffer[3],
+      g_windEspNowLatest.windSpeed, static_cast<unsigned long>(g_windEspNowLatest.sequenceNumber),
       g_displayBuffer[0], g_displayBuffer[1], g_displayBuffer[2], g_displayBuffer[3], g_displayBuffer[4],
       g_imuData.roll, g_imuData.pitch, g_imuData.yaw);
   }

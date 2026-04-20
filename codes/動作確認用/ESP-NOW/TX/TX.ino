@@ -31,6 +31,7 @@ void setup() {
   delay(200);
 
   WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.disconnect();
 
   Serial.print("[TX] MAC address: ");

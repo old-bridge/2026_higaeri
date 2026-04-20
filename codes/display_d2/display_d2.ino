@@ -1,3 +1,6 @@
+#include <HardwareSerial.h>
+#include <SPI.h>
+#include <TFT_eSPI.h>
 #include <Wire.h>
 
 #include "DisplayD2Config.h"
@@ -9,6 +12,17 @@ constexpr uint8_t kUltrasonicRxPin = D0;
 constexpr uint8_t kUltrasonicTxPin = D1;
 constexpr uint8_t kStatusLedPin = D10;
 constexpr uint8_t kBuzzerPin = D3;
+constexpr uint8_t kTftSckPin = 8;
+constexpr uint8_t kTftMisoPin = 9;
+constexpr uint8_t kTftMosiPin = 10;
+constexpr uint32_t kUltrasonicBaudRate = 9600;
+constexpr uint32_t kUltrasonicResponseTimeoutMs = 120;
+constexpr uint16_t kUltrasonicInvalidReading = 0xFFFF;
+constexpr uint16_t kDisplayBackground = TFT_BLACK;
+constexpr uint16_t kDisplayForeground = TFT_WHITE;
+constexpr uint16_t kDisplayAccent = TFT_CYAN;
+constexpr uint16_t kDisplayWarning = TFT_RED;
+constexpr uint8_t kUrm37DistanceCmd[4] = {0x22, 0x00, 0x00, 0x22};
 
 struct DisplayD2Payload {
   uint16_t potentiometer1;
@@ -19,12 +33,51 @@ struct DisplayD2Payload {
 
 
 constexpr uint32_t kDebugPrintIntervalMs = 1000;
+constexpr uint32_t kDisplayRefreshIntervalMs = 100;
 
 namespace {
+HardwareSerial g_ultrasonicSerial(1);
+TFT_eSPI g_tft;
 DisplayD2Payload g_payload = {0, 0, 0, 0};
 unsigned long g_lastUpdateAt = 0;
 unsigned long g_lastDebugAt = 0;
+unsigned long g_lastRenderAt = 0;
 volatile bool g_rollAlarm = false;
+bool g_ultrasonicValid = false;
+
+bool readUltrasonicDistance(uint16_t& distanceCm) {
+  while (g_ultrasonicSerial.available() > 0) {
+    g_ultrasonicSerial.read();
+  }
+
+  g_ultrasonicSerial.write(kUrm37DistanceCmd, sizeof(kUrm37DistanceCmd));
+
+  const unsigned long startedAt = millis();
+  while (g_ultrasonicSerial.available() < 4) {
+    if (millis() - startedAt > kUltrasonicResponseTimeoutMs) {
+      return false;
+    }
+    yield();
+  }
+
+  uint8_t response[4] = {0};
+  for (uint8_t index = 0; index < 4; ++index) {
+    response[index] = static_cast<uint8_t>(g_ultrasonicSerial.read());
+  }
+
+  const uint8_t checksum = static_cast<uint8_t>(response[0] + response[1] + response[2]);
+  if (response[0] != kUrm37DistanceCmd[0] || checksum != response[3]) {
+    return false;
+  }
+
+  const uint16_t rawDistance = static_cast<uint16_t>((response[1] << 8) | response[2]);
+  if (rawDistance == kUltrasonicInvalidReading) {
+    return false;
+  }
+
+  distanceCm = rawDistance;
+  return true;
+}
 
 void writePayload() {
   uint8_t buffer[kDisplayD2PayloadSize] = {0};
@@ -48,7 +101,46 @@ void updateSensors() {
   g_payload.potentiometer1 = analogRead(kPot1Pin);
   g_payload.potentiometer2 = analogRead(kPot2Pin);
   g_payload.batteryVoltage = analogRead(kBatteryPin);
-  g_payload.ultrasonicAlt = 0;
+
+  uint16_t distanceCm = 0;
+  if (readUltrasonicDistance(distanceCm)) {
+    g_payload.ultrasonicAlt = distanceCm;
+    g_ultrasonicValid = true;
+  } else {
+    g_ultrasonicValid = false;
+  }
+}
+
+void renderDisplay() {
+  if (millis() - g_lastRenderAt < kDisplayRefreshIntervalMs) {
+    return;
+  }
+  g_lastRenderAt = millis();
+
+  g_tft.fillScreen(kDisplayBackground);
+  g_tft.setTextColor(kDisplayForeground, kDisplayBackground);
+
+  char line[40];
+  g_tft.drawCentreString("DISPLAY D2", 120, 8, 2);
+
+  g_tft.setTextColor(g_ultrasonicValid ? kDisplayAccent : kDisplayWarning, kDisplayBackground);
+  if (g_ultrasonicValid) {
+    snprintf(line, sizeof(line), "US: %u cm", g_payload.ultrasonicAlt);
+  } else {
+    snprintf(line, sizeof(line), "US: ----");
+  }
+  g_tft.drawString(line, 8, 40, 4);
+
+  g_tft.setTextColor(kDisplayForeground, kDisplayBackground);
+  snprintf(line, sizeof(line), "P1:%4u  P2:%4u", g_payload.potentiometer1, g_payload.potentiometer2);
+  g_tft.drawString(line, 8, 96, 2);
+
+  snprintf(line, sizeof(line), "BATT:%4u", g_payload.batteryVoltage);
+  g_tft.drawString(line, 8, 118, 2);
+
+  g_tft.setTextColor(g_rollAlarm ? kDisplayWarning : TFT_GREEN, kDisplayBackground);
+  snprintf(line, sizeof(line), "ROLL:%s", g_rollAlarm ? "ALARM" : "OK");
+  g_tft.drawString(line, 8, 140, 2);
 }
 
 void printDebug() {
@@ -56,11 +148,12 @@ void printDebug() {
     return;
   }
   g_lastDebugAt = millis();
-  Serial.printf("[display_d2] pot1=%u  pot2=%u  batt=%u  ultra=%u  roll_alarm=%s\n",
+  Serial.printf("[display_d2] pot1=%u  pot2=%u  batt=%u  ultra=%u  us=%s  roll_alarm=%s\n",
     g_payload.potentiometer1,
     g_payload.potentiometer2,
     g_payload.batteryVoltage,
     g_payload.ultrasonicAlt,
+    g_ultrasonicValid ? "OK" : "NG",
     g_rollAlarm ? "ON" : "OFF");
 }
 }
@@ -81,9 +174,15 @@ void setup() {
   pinMode(kPot1Pin, INPUT);
   pinMode(kPot2Pin, INPUT);
   pinMode(kBatteryPin, INPUT);
-  pinMode(kUltrasonicRxPin, INPUT);
-  pinMode(kUltrasonicTxPin, OUTPUT);
-  digitalWrite(kUltrasonicTxPin, LOW);
+
+  g_ultrasonicSerial.begin(kUltrasonicBaudRate, SERIAL_8N1, kUltrasonicRxPin, kUltrasonicTxPin);
+
+  SPI.begin(kTftSckPin, kTftMisoPin, kTftMosiPin);
+  g_tft.init();
+  g_tft.setRotation(0);
+  g_tft.fillScreen(kDisplayBackground);
+  g_tft.setTextColor(kDisplayForeground, kDisplayBackground);
+  g_tft.drawCentreString("DISPLAY D2", 120, 8, 2);
 
   Wire.begin(kDisplayD2I2CAddress);
   Wire.onRequest(writePayload);
@@ -92,6 +191,7 @@ void setup() {
 
 void loop() {
   updateSensors();
+  renderDisplay();
   printDebug();
 
   if (g_rollAlarm) {

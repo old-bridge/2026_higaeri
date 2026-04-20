@@ -2,13 +2,14 @@
 """
 TFT Display D1 プレビューツール
 ================================
-display_d1.ino の renderDisplay() を PC 上で再現します。
+display_d1.ino の drawGaugeFrame() + renderDisplay() を PC 上で再現します。
 スライダで各センサ値を変えるとリアルタイムに画面が更新されます。
 
 依存ライブラリ: tkinter（Python 標準搭載）のみ
 使い方: python tft_preview.py
 """
 
+import math
 import tkinter as tk
 from tkinter import ttk
 
@@ -31,9 +32,37 @@ TFT_WHITE = "#FFFFFF"
 TFT_GREEN = "#07E000"          # TFT_GREEN (RGB565 #07E0)
 TFT_RED   = "#F80000"          # TFT_RED   (RGB565 #F800)
 
-# TFT Font 2 の PC 近似フォント（Courier を使用）
-# SCALE=2 のとき 16px フォント高 × 2 = 32px 相当 → 18pt でほぼ一致
-FONT2 = ("Courier", 10 + SCALE * 4, "bold")
+# ── ゲージ定数（Arduino コードと一致） ──────────────────────────────
+GAUGE_CX           = 120
+GAUGE_CY           = 125
+GAUGE_OUTER_R      = 105
+ARC_OUTER_R        = 103
+ARC_INNER_R        = 88
+TICK_OUTER_R       = 105
+TICK_MAJOR_INNER_R = 85
+TICK_MINOR_INNER_R = 95
+NEEDLE_LEN         = 75
+NUMBER_R           = 72
+GAUGE_START_DEG    = 30.0
+GAUGE_SWEEP_DEG    = 300.0
+GAUGE_MAX_SPEED    = 10.0
+
+# フォント
+FONT2      = ("Courier", 10 + SCALE * 4, "bold")   # 下部情報パネル
+FONT_SPEED = ("Arial Black", 60, "bold")            # 中央デジタル速度
+FONT_GAUGE = ("Arial Black", 11, "bold")            # 目盛り数字
+
+
+def speed_to_angle_deg(speed: float) -> float:
+    return GAUGE_START_DEG + (speed / GAUGE_MAX_SPEED) * GAUGE_SWEEP_DEG
+
+
+def gx(angle_deg: float, r: float) -> float:
+    return GAUGE_CX + r * math.sin(math.radians(angle_deg))
+
+
+def gy(angle_deg: float, r: float) -> float:
+    return GAUGE_CY - r * math.cos(math.radians(angle_deg))
 
 
 class TFTPreviewer(tk.Tk):
@@ -77,14 +106,15 @@ class TFTPreviewer(tk.Tk):
 
         self._vars: dict[str, tk.Variable] = {}
 
+        # airspeed はModbusレジスタ値（対気速度 m/s × 10）
         # (変数キー, ラベル, 最小, 最大, 初期値)
         sliders = [
-            ("airspeed",   "対気速度  [raw ADC 0-1023]",  0, 1023, 512),
-            ("baro_alt",   "気圧高度  [×0.1 m]          ", 0, 5000, 500),
-            ("pot1",       "ポテンショ1 [raw ADC 0-1023]", 0, 1023, 256),
-            ("pot2",       "ポテンショ2 [raw ADC 0-1023]", 0, 1023, 256),
-            ("battery",    "バッテリ    [raw ADC 0-1023]", 0, 1023, 800),
-            ("ultrasonic", "超音波高度  [raw ADC 0-1023]", 0, 1023,   0),
+            ("airspeed",   "対気速度  [m/s×10 : 0=0.0, 100=10.0]", 0, 100, 50),
+            ("baro_alt",   "気圧高度  [×0.1 m]                   ", 0, 5000, 500),
+            ("pot1",       "ポテンショ1 [raw ADC 0-1023]          ", 0, 1023, 256),
+            ("pot2",       "ポテンショ2 [raw ADC 0-1023]          ", 0, 1023, 256),
+            ("battery",    "バッテリ    [raw ADC 0-1023]          ", 0, 1023, 800),
+            ("ultrasonic", "超音波高度  [raw ADC 0-1023]          ", 0, 1023,   0),
         ]
 
         for key, label, lo, hi, init in sliders:
@@ -128,10 +158,9 @@ class TFTPreviewer(tk.Tk):
         notes = (
             "baroAlt  = altitudeMeters × 10\n"
             "  → 表示値 ÷ 10 = 実際の高度 [m]\n"
-            "battery  = analogRead / 1023 × 3.3V\n"
-            "  (分圧比に応じて係数を掛ける)\n"
-            "airspeed = Modbus 書き込みレジスタ値\n"
-            "  (logger → display_d1 に送信)"
+            "airspeed = Modbus レジスタ値 (m/s × 10)\n"
+            "  → 50 = 5.0 m/s, 73 = 7.3 m/s\n"
+            "緑弧: 5.5～8.0 m/s（定常飛行域）"
         )
         tk.Label(
             note_frame,
@@ -144,7 +173,7 @@ class TFTPreviewer(tk.Tk):
     def _make_slider_row(self, parent, label, var: tk.IntVar, lo: int, hi: int):
         row = ttk.Frame(parent)
         row.pack(fill=tk.X, padx=10, pady=2)
-        ttk.Label(row, text=label, width=28, anchor="w").pack(side=tk.LEFT)
+        ttk.Label(row, text=label, width=38, anchor="w").pack(side=tk.LEFT)
         ttk.Scale(
             row,
             from_=lo,
@@ -156,12 +185,12 @@ class TFTPreviewer(tk.Tk):
         ).pack(side=tk.LEFT, padx=4)
         ttk.Label(row, textvariable=var, width=6).pack(side=tk.LEFT)
 
-    # ── TFT 描画ヘルパー（TFT_eSPI API を近似） ──────────────────────
-    def _sx(self, x: int) -> int:
-        return x * SCALE
+    # ── TFT 描画ヘルパー ─────────────────────────────────────────────
+    def _sx(self, x: float) -> int:
+        return int(x * SCALE)
 
-    def _sy(self, y: int) -> int:
-        return y * SCALE
+    def _sy(self, y: float) -> int:
+        return int(y * SCALE)
 
     def _draw_string(self, text: str, x: int, y: int, color: str = TFT_WHITE):
         """TFT_eSPI の drawString(text, x, y, 2) に対応"""
@@ -174,15 +203,93 @@ class TFTPreviewer(tk.Tk):
             anchor="nw",
         )
 
-    def _draw_centre_string(self, text: str, cx: int, y: int, color: str = TFT_WHITE):
-        """TFT_eSPI の drawCentreString(text, cx, y, 2) に対応"""
-        self.cv.create_text(
-            self._sx(cx),
-            self._sy(y),
-            text=text,
-            fill=color,
-            font=FONT2,
-            anchor="n",
+    def _draw_arc_band(self, start_speed: float, end_speed: float, color: str):
+        # 台形ポリゴンで塗りつぶすことで隙間を完全になくす
+        a = speed_to_angle_deg(start_speed)
+        a_end = speed_to_angle_deg(end_speed)
+        step = 2.0  # degrees per segment
+        while a < a_end:
+            a_next = min(a + step, a_end)
+            points = [
+                self._sx(gx(a,      ARC_INNER_R)), self._sy(gy(a,      ARC_INNER_R)),
+                self._sx(gx(a,      ARC_OUTER_R)), self._sy(gy(a,      ARC_OUTER_R)),
+                self._sx(gx(a_next, ARC_OUTER_R)), self._sy(gy(a_next, ARC_OUTER_R)),
+                self._sx(gx(a_next, ARC_INNER_R)), self._sy(gy(a_next, ARC_INNER_R)),
+            ]
+            self.cv.create_polygon(points, fill=color, outline=color)
+            a = a_next
+
+    def _draw_needle(self, speed: float, color: str):
+        clamped = max(0.0, min(GAUGE_MAX_SPEED, speed))
+        rad = math.radians(speed_to_angle_deg(clamped))
+        tx = GAUGE_CX + NEEDLE_LEN * math.sin(rad)
+        ty = GAUGE_CY - NEEDLE_LEN * math.cos(rad)
+        perp = rad + math.pi / 2
+        bx1 = GAUGE_CX + 3 * math.sin(perp)
+        by1 = GAUGE_CY - 3 * math.cos(perp)
+        bx2 = GAUGE_CX - 3 * math.sin(perp)
+        by2 = GAUGE_CY + 3 * math.cos(perp)
+        self.cv.create_polygon(
+            self._sx(tx), self._sy(ty),
+            self._sx(bx1), self._sy(by1),
+            self._sx(bx2), self._sy(by2),
+            fill=color, outline=color,
+        )
+
+    def _draw_gauge_frame(self):
+        cv = self.cv
+
+        # 外周円（2重線）
+        cx, cy, r = GAUGE_CX, GAUGE_CY, GAUGE_OUTER_R
+        cv.create_oval(
+            self._sx(cx - r), self._sy(cy - r),
+            self._sx(cx + r), self._sy(cy + r),
+            outline=TFT_WHITE, width=2,
+        )
+        cv.create_oval(
+            self._sx(cx - r + 1), self._sy(cy - r + 1),
+            self._sx(cx + r - 1), self._sy(cy + r - 1),
+            outline=TFT_WHITE, width=1,
+        )
+
+        # 弧帯: 赤 2-5.5 / 緑 5.5-8（定常飛行域）/ 赤 8-10
+        self._draw_arc_band(2.0, 5.5, TFT_RED)
+        self._draw_arc_band(5.5, 8.0, TFT_GREEN)
+        self._draw_arc_band(8.0, 10.0, TFT_RED)
+
+        # 主目盛り + 数字（0〜10）
+        for i in range(11):
+            angle = speed_to_angle_deg(float(i))
+            x1, y1 = gx(angle, TICK_OUTER_R), gy(angle, TICK_OUTER_R)
+            x2, y2 = gx(angle, TICK_MAJOR_INNER_R), gy(angle, TICK_MAJOR_INNER_R)
+            cv.create_line(
+                self._sx(x1), self._sy(y1),
+                self._sx(x2), self._sy(y2),
+                fill=TFT_WHITE, width=SCALE,
+            )
+            nx, ny = gx(angle, NUMBER_R), gy(angle, NUMBER_R)
+            cv.create_text(
+                self._sx(nx), self._sy(ny - 11),
+                text=str(i), fill=TFT_WHITE, font=FONT_GAUGE,
+            )
+
+        # 副目盛り（0.5 m/s 刻み、奇数ステップのみ）
+        for j in range(1, 20, 2):
+            angle = speed_to_angle_deg(j * 0.5)
+            x1, y1 = gx(angle, TICK_OUTER_R), gy(angle, TICK_OUTER_R)
+            x2, y2 = gx(angle, TICK_MINOR_INNER_R), gy(angle, TICK_MINOR_INNER_R)
+            cv.create_line(
+                self._sx(x1), self._sy(y1),
+                self._sx(x2), self._sy(y2),
+                fill=TFT_WHITE, width=SCALE,
+            )
+
+        # 中心ポイント
+        r5 = 5
+        cv.create_oval(
+            self._sx(cx - r5), self._sy(cy - r5),
+            self._sx(cx + r5), self._sy(cy + r5),
+            fill=TFT_WHITE, outline=TFT_WHITE,
         )
 
     # ── メインレンダリング（display_d1.ino の renderDisplay() と同じ） ──
@@ -197,59 +304,50 @@ class TFTPreviewer(tk.Tk):
         )
 
         # センサ値を取得
-        airspeed   = self._vars["airspeed"].get()
-        baro_alt   = self._vars["baro_alt"].get()
-        pot1       = self._vars["pot1"].get()
-        pot2       = self._vars["pot2"].get()
-        battery    = self._vars["battery"].get()
-        ultrasonic = self._vars["ultrasonic"].get()
-        i2c_ok     = self._i2c_ok.get()
-        ok_cnt     = self._vars["ok_cnt"].get()
-        err_cnt    = self._vars["err_cnt"].get()
+        airspeed_raw = self._vars["airspeed"].get()
+        baro_alt     = self._vars["baro_alt"].get()
+        pot1         = self._vars["pot1"].get()
+        pot2         = self._vars["pot2"].get()
+        battery      = self._vars["battery"].get()
+        ultrasonic   = self._vars["ultrasonic"].get()
+        i2c_ok       = self._i2c_ok.get()
+        ok_cnt       = self._vars["ok_cnt"].get()
+        err_cnt      = self._vars["err_cnt"].get()
 
-        # タイトル
-        self._draw_centre_string("DISPLAY D1", 120, 8)
+        # Modbus レジスタ値 → m/s（小数点以下1桁）
+        current_speed = airspeed_raw / 10.0
 
-        # ── センサ行（Arduino コードと同じ文字列・座標） ──────────
-        y = 30
-        self._draw_string(f"Airspeed : {airspeed}", 8, y)
-        y += 20
+        # ── ゲージフレーム描画 ──
+        self._draw_gauge_frame()
 
-        self._draw_string(f"Baro Alt : {baro_alt}", 8, y)
-        y += 20
+        # ── ニードル ──
+        self._draw_needle(current_speed, TFT_RED)
 
-        self._draw_string(f"Pot1/Pot2: {pot1} / {pot2}", 8, y)
-        y += 20
-
-        self._draw_string(f"Battery  : {battery}", 8, y)
-        y += 20
-
-        self._draw_string(f"Ultrason.: {ultrasonic}", 8, y)
-        y += 26
-
-        # I2C ステータス（緑 or 赤）
-        i2c_color = TFT_GREEN if i2c_ok else TFT_RED
-        i2c_label = "OK" if i2c_ok else "ERROR"
-        self._draw_string(f"I2C {i2c_label}", 8, y, color=i2c_color)
-        y += 20
-
-        # OK / ERR カウンタ
-        self._draw_string(f"OK:{ok_cnt} ERR:{err_cnt}", 8, y)
-
-        # ── 画面下部の空き領域にグリッド線（改善参考用） ─────────────
-        y += 30
-        cv.create_line(
-            self._sx(0), self._sy(y),
-            self._sx(TFT_W), self._sy(y),
-            fill="#888888", width=1, dash=(4, 4),
-        )
+        # ── 中央デジタル速度（Arial_Black56 相当: "9.9" 形式）──
+        whole = int(current_speed)
+        frac  = int(current_speed * 10) % 10
+        speed_str = f"{whole}.{frac}"
         cv.create_text(
-            self._sx(4), self._sy(y + 4),
-            text="↑ 空き領域（改善可能）",
-            fill="#888888",
-            font=("Consolas", 8),
-            anchor="nw",
+            self._sx(GAUGE_CX), self._sy(GAUGE_CY - 28),
+            text=speed_str,
+            fill=TFT_WHITE,
+            font=FONT_SPEED,
         )
+
+        # ── 下部情報パネル（Arduino コードと同じ文字列・座標）──
+        y = 250
+        line = f"B:{baro_alt:<5} Bt:{battery:<5}"
+        self._draw_string(line, 4, y)
+        y += 18
+
+        line = f"P1:{pot1:<4} P2:{pot2:<4} U:{ultrasonic:<4}"
+        self._draw_string(line, 4, y)
+        y += 18
+
+        i2c_color = TFT_GREEN if i2c_ok else TFT_RED
+        i2c_label = "OK" if i2c_ok else "ERR"
+        line = f"I2C:{i2c_label:<3} OK:{ok_cnt:<5} E:{err_cnt:<5}"
+        self._draw_string(line, 4, y, color=i2c_color)
 
 
 if __name__ == "__main__":

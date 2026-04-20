@@ -8,13 +8,15 @@ CSV として保存するスクリプト。
     pip install bleak
 
 送受信フォーマット (ESP32 → PC):
-    timestamp_us,pulse_count,rpm\n
+    timestamp_us,pulse_count,rpm,aoa_raw,aos_raw\n
 
 出力 CSV 列:
     pc_time_iso      : PC 側受信時刻 (ISO 8601, 例: 2026-04-11T12:34:56.789012)
     esp_timestamp_us : ESP32 側 esp_timer 基準のタイムスタンプ [µs]
     pulse_count      : 直前 50 ms ウィンドウのパルス数
     rpm              : 回転数 [rpm] (ESP32 側で計算済み)
+    aoa_raw          : AS5600 角度 (迎角側) 生値 [0–4095]
+    aos_raw          : AS5600 角度 (滑り角側) 生値 [0–4095]
 
 使い方:
     python receive_ble.py                       # デバイス自動スキャン
@@ -40,13 +42,15 @@ NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # PC→ESP32 (Write)
 DEVICE_NAME        = "AirData-BLE"
 RECONNECT_DELAY    = 3.0    # 秒
 SCAN_TIMEOUT       = 10.0   # 秒
-SAMPLE_INTERVAL_S  = 0.050  # ESP32 側サンプリング周期 [s]
+SAMPLE_INTERVAL_S  = 0.500  # ESP32 側サンプリング周期 [s]
 
 CSV_HEADER = [
     "pc_time_iso",
     "esp_timestamp_us",
     "pulse_count",
     "rpm",
+    "aoa_raw",
+    "aos_raw",
 ]
 
 
@@ -100,21 +104,22 @@ async def run(address: str, csv_path: Path) -> None:
                 pc_time = datetime.datetime.now().isoformat(timespec="microseconds")
                 parts = line.split(",")
 
-                if len(parts) != 3:
+                if len(parts) != 5:
                     print(f"[warn] 不正なデータ ({len(parts)} フィールド): {line!r}")
                     continue
 
                 try:
                     esp_ts, pulse = int(parts[0]), int(parts[1])
                     rpm = float(parts[2])
+                    aoa_raw, aos_raw = int(parts[3]), int(parts[4])
                 except ValueError:
                     print(f"[warn] パース失敗: {line!r}")
                     continue
 
-                writer.writerow([pc_time, esp_ts, pulse, f"{rpm:.1f}"])
+                writer.writerow([pc_time, esp_ts, pulse, f"{rpm:.1f}", aoa_raw, aos_raw])
                 csv_file.flush()
                 print(
-                    f"  {pc_time}  pulse={pulse:4d}  rpm={rpm:8.1f}"
+                    f"  {pc_time}  pulse={pulse:4d}  rpm={rpm:8.1f}  aoa={aoa_raw:4d}  aos={aos_raw:4d}"
                 )
 
     # 切断後に自動再接続するループ
