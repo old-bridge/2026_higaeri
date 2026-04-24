@@ -16,13 +16,13 @@ constexpr uint8_t kTftSckPin = 8;
 constexpr uint8_t kTftMisoPin = 9;
 constexpr uint8_t kTftMosiPin = 10;
 constexpr uint32_t kUltrasonicBaudRate = 9600;
-constexpr uint32_t kUltrasonicResponseTimeoutMs = 120;
+constexpr uint32_t kUltrasonicResponseTimeoutMs = 250;  // センサ測定時間に余裕を持たせる
 constexpr uint16_t kUltrasonicInvalidReading = 0xFFFF;
 constexpr uint16_t kDisplayBackground = TFT_BLACK;
 constexpr uint16_t kDisplayForeground = TFT_WHITE;
 constexpr uint16_t kDisplayAccent = TFT_CYAN;
 constexpr uint16_t kDisplayWarning = TFT_RED;
-constexpr uint8_t kUrm37DistanceCmd[4] = {0x22, 0x00, 0x00, 0x22};
+constexpr uint8_t kUltrasonicCmd = 0xA0;
 
 struct DisplayD2Payload {
   uint16_t potentiometer1;
@@ -50,32 +50,31 @@ bool readUltrasonicDistance(uint16_t& distanceCm) {
     g_ultrasonicSerial.read();
   }
 
-  g_ultrasonicSerial.write(kUrm37DistanceCmd, sizeof(kUrm37DistanceCmd));
+  g_ultrasonicSerial.write(kUltrasonicCmd);
 
   const unsigned long startedAt = millis();
-  while (g_ultrasonicSerial.available() < 4) {
+  while (g_ultrasonicSerial.available() < 3) {
     if (millis() - startedAt > kUltrasonicResponseTimeoutMs) {
+      Serial.printf("[us] timeout: available=%d after %lums\n",
+        g_ultrasonicSerial.available(), millis() - startedAt);
       return false;
     }
     yield();
   }
 
-  uint8_t response[4] = {0};
-  for (uint8_t index = 0; index < 4; ++index) {
-    response[index] = static_cast<uint8_t>(g_ultrasonicSerial.read());
-  }
+  const uint8_t byteH = static_cast<uint8_t>(g_ultrasonicSerial.read());
+  const uint8_t byteM = static_cast<uint8_t>(g_ultrasonicSerial.read());
+  const uint8_t byteL = static_cast<uint8_t>(g_ultrasonicSerial.read());
 
-  const uint8_t checksum = static_cast<uint8_t>(response[0] + response[1] + response[2]);
-  if (response[0] != kUrm37DistanceCmd[0] || checksum != response[3]) {
+  Serial.printf("[us] raw: H=0x%02X M=0x%02X L=0x%02X\n", byteH, byteM, byteL);
+
+  const uint32_t rawMm = ((uint32_t)byteH << 16) | ((uint32_t)byteM << 8) | byteL;
+  if (rawMm == 0) {
+    Serial.println("[us] rawMm==0, skip");
     return false;
   }
 
-  const uint16_t rawDistance = static_cast<uint16_t>((response[1] << 8) | response[2]);
-  if (rawDistance == kUltrasonicInvalidReading) {
-    return false;
-  }
-
-  distanceCm = rawDistance;
+  distanceCm = static_cast<uint16_t>(rawMm / 10);
   return true;
 }
 
@@ -166,6 +165,8 @@ void onI2CReceive(int len) {
 
 void setup() {
   Serial.begin(kDebugBaudRate);
+  delay(1000);  // USB CDC (XIAO ESP32-C3) の接続待ち
+  Serial.println("[d2] setup start");
   pinMode(kStatusLedPin, OUTPUT);
   digitalWrite(kStatusLedPin, HIGH);
   delay(100);
@@ -177,7 +178,7 @@ void setup() {
 
   g_ultrasonicSerial.begin(kUltrasonicBaudRate, SERIAL_8N1, kUltrasonicRxPin, kUltrasonicTxPin);
 
-  SPI.begin(kTftSckPin, kTftMisoPin, kTftMosiPin);
+  // SPI.begin() は TFT_eSPI が内部で初期化するため不要 (呼ぶと競合してクラッシュ)
   g_tft.init();
   g_tft.setRotation(0);
   g_tft.fillScreen(kDisplayBackground);

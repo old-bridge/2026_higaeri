@@ -15,7 +15,7 @@ constexpr uint8_t kEncoderPin = D8;
 constexpr uint8_t kBatterySensePin = A0;
 constexpr uint8_t kAosSdaPin = D2;   // ソフトウェアI2C SDA (AoS)
 constexpr uint8_t kAosSclPin = D3;   // ソフトウェアI2C SCL (AoS)
-constexpr bool kEnableAosSensor = false;
+constexpr bool kEnableAosSensor = true;
 
 constexpr uint8_t  kAs5600Address  = 0x36;
 constexpr uint8_t  kAs5600RegAngle = 0x0C;
@@ -36,6 +36,7 @@ struct EspNowAirDataPacket {
   uint16_t windSpeed;       // 0.5 s 窓の最小風速 [0.1 m/s]
   uint16_t pulseCountMin;   // 0.5 s 窓の 20 Hz サンプル最小パルス数
   uint16_t pulseCountMax;   // 0.5 s 窓の 20 Hz サンプル最大パルス数
+  uint16_t pulseCountTotal; // 0.5 s 窓の 20 Hz サンプル総パルス数
   uint16_t as5600Primary;
   uint16_t as5600Secondary;
   uint16_t batteryRaw;
@@ -99,6 +100,7 @@ private:
 namespace {
 HardwareSerial MySerial0(0);
 AirDataSlaveNode g_slave(MySerial0);
+TwoWire Wire1(1);
 static portMUX_TYPE g_sampleMux = portMUX_INITIALIZER_UNLOCKED;
 
 struct SampleSlot {
@@ -119,8 +121,10 @@ uint32_t g_lastPulseCountInSample = 0;
 float g_lastPulsesPerSec = 0.0f;
 uint32_t g_lastPulseCountMin = 0;
 uint32_t g_lastPulseCountMax = 0;
+uint32_t g_lastPulseCountTotal = 0;
 uint32_t g_windowPulseCountMin = 0;
 uint32_t g_windowPulseCountMax = 0;
+uint32_t g_windowPulseCountTotal = 0;
 uint8_t g_windowSampleCount = 0;
 bool g_broadcastWindowReady = false;
 const uint8_t kBroadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -141,6 +145,7 @@ void sendEspNow() {
   packet.windSpeed       = convertPulseCountToWindSpeed(g_lastPulseCountMin, kAirspeedSamplePeriodSec);
   packet.pulseCountMin   = static_cast<uint16_t>(g_lastPulseCountMin);
   packet.pulseCountMax   = static_cast<uint16_t>(g_lastPulseCountMax);
+  packet.pulseCountTotal = static_cast<uint16_t>(g_lastPulseCountTotal);
   packet.as5600Primary   = g_snapshot.as5600Primary;
   packet.as5600Secondary = g_snapshot.as5600Secondary;
   packet.batteryRaw      = g_snapshot.batteryRaw;
@@ -196,6 +201,7 @@ void updateWindSpeed() {
   if (g_windowSampleCount == 0) {
     g_windowPulseCountMin = sampleSlot.pulseCount;
     g_windowPulseCountMax = sampleSlot.pulseCount;
+    g_windowPulseCountTotal = sampleSlot.pulseCount;
   } else {
     if (sampleSlot.pulseCount < g_windowPulseCountMin) {
       g_windowPulseCountMin = sampleSlot.pulseCount;
@@ -203,12 +209,14 @@ void updateWindSpeed() {
     if (sampleSlot.pulseCount > g_windowPulseCountMax) {
       g_windowPulseCountMax = sampleSlot.pulseCount;
     }
+    g_windowPulseCountTotal += sampleSlot.pulseCount;
   }
 
   g_windowSampleCount++;
   if (g_windowSampleCount >= kEspNowBroadcastSamples) {
     g_lastPulseCountMin = g_windowPulseCountMin;
     g_lastPulseCountMax = g_windowPulseCountMax;
+    g_lastPulseCountTotal = g_windowPulseCountTotal;
     g_windowSampleCount = 0;
     g_broadcastWindowReady = true;
   }
@@ -286,7 +294,7 @@ void setup() {
   digitalWrite(kStatusLedPin, LOW);
   pinMode(kEncoderPin, INPUT_PULLUP);
   pinMode(kBatterySensePin, INPUT);
-  attachInterrupt(digitalPinToInterrupt(kEncoderPin), handleEncoderPulse, RISING);
+  attachInterrupt(digitalPinToInterrupt(kEncoderPin), handleEncoderPulse, FALLING);
 
   // ハードウェアI2C (AoA: 迎え角)
   Wire.begin();
@@ -319,7 +327,7 @@ void setup() {
   g_slave.begin();
 
   WiFi.mode(WIFI_STA);
-  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  WiFi.setTxPower(WIFI_POWER_21dBm);
   WiFi.disconnect();
   if (esp_now_init() == ESP_OK) {
     esp_now_peer_info_t peer = {};
