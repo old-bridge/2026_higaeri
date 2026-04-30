@@ -3,6 +3,7 @@
 #include <HardwareSerial.h>
 #include <WiFi.h>
 #include <Wire.h>
+#include <SoftwareI2C.h>
 
 #include "ModbusConfig.h"
 #include "ModbusSlave.h"
@@ -13,12 +14,12 @@ constexpr uint8_t kModbusTxPin = D6;  // GPIO21 (UART0 default TX)
 constexpr uint8_t kStatusLedPin = D0;
 constexpr uint8_t kEncoderPin = D8;
 constexpr uint8_t kBatterySensePin = A0;
-constexpr uint8_t kAosSdaPin = D2;   // ソフトウェアI2C SDA (AoS)
-constexpr uint8_t kAosSclPin = D3;   // ソフトウェアI2C SCL (AoS)
+constexpr uint8_t kAosSdaPin = D2;  // ソフトウェアI2C SDA (AoS)
+constexpr uint8_t kAosSclPin = D3;  // ソフトウェアI2C SCL (AoS)
 constexpr bool kEnableAosSensor = true;
 
-constexpr uint8_t  kAs5600Address  = 0x36;
-constexpr uint8_t  kAs5600RegAngle = 0x0C;
+constexpr uint8_t kAs5600Address = 0x36;
+constexpr uint8_t kAs5600RegAngle = 0x0C;
 
 // Airspeed is sampled at 20 Hz and ESP-NOW broadcasts the 0.5 s min/max envelope.
 constexpr uint32_t kAirspeedSamplePeriodUs = 50000UL;
@@ -28,15 +29,15 @@ constexpr float kAirspeedPerPps = 1.0f / 1186.6f;  // encoder1
 constexpr float kAirspeedOffset = 0.4f;
 constexpr uint32_t kDebugPrintIntervalMs = 1000;
 static_assert(kAirspeedSamplePeriodUs * kEspNowBroadcastSamples == 500000UL,
-  "ESP-NOW broadcast window must stay at 0.5 seconds");
+              "ESP-NOW broadcast window must stay at 0.5 seconds");
 
 struct EspNowAirDataPacket {
-  uint8_t  deviceId;        // 0x01 = air_data
-  uint8_t  reserved;
-  uint16_t windSpeed;       // 0.5 s 窓の最小風速 [0.1 m/s]
-  uint16_t pulseCountMin;   // 0.5 s 窓の 20 Hz サンプル最小パルス数
-  uint16_t pulseCountMax;   // 0.5 s 窓の 20 Hz サンプル最大パルス数
-  uint16_t pulseCountTotal; // 0.5 s 窓の 20 Hz サンプル総パルス数
+  uint8_t deviceId;  // 0x01 = air_data
+  uint8_t reserved;
+  uint16_t windSpeed;        // 0.5 s 窓の最小風速 [0.1 m/s]
+  uint16_t pulseCountMin;    // 0.5 s 窓の 20 Hz サンプル最小パルス数
+  uint16_t pulseCountMax;    // 0.5 s 窓の 20 Hz サンプル最大パルス数
+  uint16_t pulseCountTotal;  // 0.5 s 窓の 20 Hz サンプル総パルス数
   uint16_t as5600Primary;
   uint16_t as5600Secondary;
   uint16_t batteryRaw;
@@ -94,13 +95,13 @@ protected:
   }
 
 private:
-  AirDataSnapshot snapshot_ = {0, 0, 0, 0};
+  AirDataSnapshot snapshot_ = { 0, 0, 0, 0 };
 };
 
 namespace {
 HardwareSerial MySerial0(0);
 AirDataSlaveNode g_slave(MySerial0);
-TwoWire Wire1(1);
+SoftwareI2C Wire1;
 static portMUX_TYPE g_sampleMux = portMUX_INITIALIZER_UNLOCKED;
 
 struct SampleSlot {
@@ -110,7 +111,7 @@ struct SampleSlot {
 volatile uint32_t g_totalPulseCount = 0;
 volatile SampleSlot g_sampleSlot = {};
 volatile bool g_sampleReady = false;
-AirDataSnapshot g_snapshot = {0, 0, 0, 0};
+AirDataSnapshot g_snapshot = { 0, 0, 0, 0 };
 volatile uint16_t g_aoaRaw = 0;
 volatile uint16_t g_aosRaw = 0;
 volatile bool g_aoaAvailable = false;
@@ -127,7 +128,7 @@ uint32_t g_windowPulseCountMax = 0;
 uint32_t g_windowPulseCountTotal = 0;
 uint8_t g_windowSampleCount = 0;
 bool g_broadcastWindowReady = false;
-const uint8_t kBroadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+const uint8_t kBroadcastAddress[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
 static uint32_t g_prevPulseCount = 0;
 
@@ -140,16 +141,16 @@ void sendEspNow() {
   g_broadcastWindowReady = false;
 
   EspNowAirDataPacket packet;
-  packet.deviceId        = 0x01;
-  packet.reserved        = 0;
-  packet.windSpeed       = convertPulseCountToWindSpeed(g_lastPulseCountMin, kAirspeedSamplePeriodSec);
-  packet.pulseCountMin   = static_cast<uint16_t>(g_lastPulseCountMin);
-  packet.pulseCountMax   = static_cast<uint16_t>(g_lastPulseCountMax);
+  packet.deviceId = 0x01;
+  packet.reserved = 0;
+  packet.windSpeed = convertPulseCountToWindSpeed(g_lastPulseCountMin, kAirspeedSamplePeriodSec);
+  packet.pulseCountMin = static_cast<uint16_t>(g_lastPulseCountMin);
+  packet.pulseCountMax = static_cast<uint16_t>(g_lastPulseCountMax);
   packet.pulseCountTotal = static_cast<uint16_t>(g_lastPulseCountTotal);
-  packet.as5600Primary   = g_snapshot.as5600Primary;
+  packet.as5600Primary = g_snapshot.as5600Primary;
   packet.as5600Secondary = g_snapshot.as5600Secondary;
-  packet.batteryRaw      = g_snapshot.batteryRaw;
-  packet.sequenceNumber  = ++g_espNowSequence;
+  packet.batteryRaw = g_snapshot.batteryRaw;
+  packet.sequenceNumber = ++g_espNowSequence;
 
   esp_now_send(kBroadcastAddress, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
 }
@@ -231,8 +232,20 @@ bool readAS5600(TwoWire& wire, uint16_t& rawAngle) {
   if (wire.requestFrom(kAs5600Address, 2) < 2) {
     return false;
   }
-  rawAngle  = ((uint16_t)wire.read() << 8) & 0x0F00;
+  rawAngle = ((uint16_t)wire.read() << 8) & 0x0F00;
   rawAngle |= (uint16_t)wire.read();
+  return true;
+}
+
+bool readAS5600Soft(SoftwareI2C& softWire, uint16_t& rawAngle) {
+  softWire.beginTransmission(kAs5600Address);
+  softWire.write(kAs5600RegAngle);
+  softWire.endTransmission();
+  if (softWire.requestFrom(kAs5600Address, (uint8_t)2) != 1) {
+    return false;
+  }
+  rawAngle = ((uint16_t)softWire.read() << 8) & 0x0F00;
+  rawAngle |= (uint16_t)softWire.read();
   return true;
 }
 
@@ -250,7 +263,7 @@ void aoaTask(void* /*arg*/) {
 void aosTask(void* /*arg*/) {
   for (;;) {
     uint16_t rawAngle = 0;
-    g_aosAvailable = readAS5600(Wire1, rawAngle);
+    g_aosAvailable = readAS5600Soft(Wire1, rawAngle);
     if (g_aosAvailable) {
       g_aosRaw = rawAngle;
     }
@@ -260,7 +273,7 @@ void aosTask(void* /*arg*/) {
 
 void updateSensors() {
   updateWindSpeed();
-  g_snapshot.as5600Primary   = g_aoaRaw;
+  g_snapshot.as5600Primary = g_aoaRaw;
   g_snapshot.as5600Secondary = kEnableAosSensor ? g_aosRaw : 0;
   g_snapshot.batteryRaw = analogRead(kBatterySensePin);
 }
@@ -271,18 +284,18 @@ void printDebug() {
   }
   g_lastDebugAt = millis();
   Serial.printf("[air_data] windSpeed=%.1f  txMin=%.1f  pulseMin=%lu  pulseMax=%lu  pulse20Hz=%lu  pulseRate=%.1f  pulseTotal=%lu  battRaw=%u  aoa=%u%s  aos=%u%s\n",
-    g_snapshot.windSpeed / 10.0f,
-    convertPulseCountToWindSpeed(g_lastPulseCountMin, kAirspeedSamplePeriodSec) / 10.0f,
-    static_cast<unsigned long>(g_lastPulseCountMin),
-    static_cast<unsigned long>(g_lastPulseCountMax),
-    static_cast<unsigned long>(g_lastPulseCountInSample),
-    g_lastPulsesPerSec,
-    static_cast<unsigned long>(g_totalPulseCount),
-    g_snapshot.batteryRaw,
-    g_snapshot.as5600Primary,
-    g_aoaAvailable ? "" : "?",
-    g_snapshot.as5600Secondary,
-    kEnableAosSensor && !g_aosAvailable ? "?" : "");
+                g_snapshot.windSpeed / 10.0f,
+                convertPulseCountToWindSpeed(g_lastPulseCountMin, kAirspeedSamplePeriodSec) / 10.0f,
+                static_cast<unsigned long>(g_lastPulseCountMin),
+                static_cast<unsigned long>(g_lastPulseCountMax),
+                static_cast<unsigned long>(g_lastPulseCountInSample),
+                g_lastPulsesPerSec,
+                static_cast<unsigned long>(g_totalPulseCount),
+                g_snapshot.batteryRaw,
+                g_snapshot.as5600Primary,
+                g_aoaAvailable ? "" : "?",
+                g_snapshot.as5600Secondary,
+                kEnableAosSensor && !g_aosAvailable ? "?" : "");
 }
 }
 
@@ -302,7 +315,6 @@ void setup() {
   // ソフトウェアI2C (AoS: 横滑り角): D2=SDA, D3=SCL
   if (kEnableAosSensor) {
     Wire1.begin(kAosSdaPin, kAosSclPin);
-    Wire1.setClock(400000);
   }
 
   xTaskCreate(aoaTask, "aoa", 2048, nullptr, 1, nullptr);

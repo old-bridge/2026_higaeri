@@ -8,8 +8,7 @@
 constexpr uint8_t kPot1Pin = A0;
 constexpr uint8_t kPot2Pin = A1;
 constexpr uint8_t kBatteryPin = A2;
-constexpr uint8_t kUltrasonicRxPin = D0;
-constexpr uint8_t kUltrasonicTxPin = D1;
+// HC-SR04はSerial0(D6=RX, D7=TX)を使用 - ピン指定不要
 constexpr uint8_t kStatusLedPin = D10;
 constexpr uint8_t kBuzzerPin = D3;
 constexpr uint8_t kTftSckPin = 8;
@@ -36,7 +35,7 @@ constexpr uint32_t kDebugPrintIntervalMs = 1000;
 constexpr uint32_t kDisplayRefreshIntervalMs = 100;
 
 namespace {
-HardwareSerial g_ultrasonicSerial(1);
+// HC-SR04: Serial0 (XIAO ESP32-C3 デフォルトUART D6/D7)
 TFT_eSPI g_tft;
 DisplayD2Payload g_payload = {0, 0, 0, 0};
 unsigned long g_lastUpdateAt = 0;
@@ -46,35 +45,36 @@ volatile bool g_rollAlarm = false;
 bool g_ultrasonicValid = false;
 
 bool readUltrasonicDistance(uint16_t& distanceCm) {
-  while (g_ultrasonicSerial.available() > 0) {
-    g_ultrasonicSerial.read();
+  while (Serial0.available() > 0) {
+    Serial0.read();
   }
 
-  g_ultrasonicSerial.write(kUltrasonicCmd);
+  Serial0.write(kUltrasonicCmd);
 
   const unsigned long startedAt = millis();
-  while (g_ultrasonicSerial.available() < 3) {
+  while (Serial0.available() < 3) {
     if (millis() - startedAt > kUltrasonicResponseTimeoutMs) {
       Serial.printf("[us] timeout: available=%d after %lums\n",
-        g_ultrasonicSerial.available(), millis() - startedAt);
+        Serial0.available(), millis() - startedAt);
       return false;
     }
     yield();
   }
 
-  const uint8_t byteH = static_cast<uint8_t>(g_ultrasonicSerial.read());
-  const uint8_t byteM = static_cast<uint8_t>(g_ultrasonicSerial.read());
-  const uint8_t byteL = static_cast<uint8_t>(g_ultrasonicSerial.read());
+  const uint8_t byteH = static_cast<uint8_t>(Serial0.read());
+  const uint8_t byteM = static_cast<uint8_t>(Serial0.read());
+  const uint8_t byteL = static_cast<uint8_t>(Serial0.read());
 
   Serial.printf("[us] raw: H=0x%02X M=0x%02X L=0x%02X\n", byteH, byteM, byteL);
 
-  const uint32_t rawMm = ((uint32_t)byteH << 16) | ((uint32_t)byteM << 8) | byteL;
-  if (rawMm == 0) {
-    Serial.println("[us] rawMm==0, skip");
+  const uint32_t rawUm = ((uint32_t)byteH << 16) | ((uint32_t)byteM << 8) | byteL;
+  if (rawUm == 0) {
+    Serial.println("[us] rawUm==0, skip");
     return false;
   }
 
-  distanceCm = static_cast<uint16_t>(rawMm / 10);
+  // rawはμm単位 → cmに変換
+  distanceCm = static_cast<uint16_t>(rawUm / 10000);
   return true;
 }
 
@@ -176,7 +176,7 @@ void setup() {
   pinMode(kPot2Pin, INPUT);
   pinMode(kBatteryPin, INPUT);
 
-  g_ultrasonicSerial.begin(kUltrasonicBaudRate, SERIAL_8N1, kUltrasonicRxPin, kUltrasonicTxPin);
+  Serial0.begin(kUltrasonicBaudRate);  // HC-SR04: D6=RX, D7=TX (ピン指定不要)
 
   // SPI.begin() は TFT_eSPI が内部で初期化するため不要 (呼ぶと競合してクラッシュ)
   g_tft.init();
